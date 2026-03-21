@@ -73,9 +73,8 @@ struct Arena {
   /// The total revenue accumulated by the arena, including the initial creation fee. Post-drawing,
   /// players will start withdrawing their respective prizes from this balance.
   uint256 balance;
-  /// Zero-based index of the winning pixel (must be less than gridWidth*gridHeight). This is
-  /// initialized to -1 and is set to a valid index in the ChainLink VRF callback, when the
-  /// winning pixel is drawn.
+  /// Zero-based index of the winning pixel (must be less than gridSize). This is initialized to -1
+  /// and is set to a valid index in the ChainLink VRF callback, when the winning pixel is drawn.
   int winner;
 }
 

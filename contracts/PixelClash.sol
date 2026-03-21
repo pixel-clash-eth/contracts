@@ -16,10 +16,8 @@ uint256 constant ARENA_CREATION_FEE = 2500;
 // Fee for a single pixel in USD cents.
 uint256 constant PIXEL_FEE = 100;
 
-uint256 constant BLOCK_DURATION = 12 seconds;
-
 // All arenas are unlocked after this time even if the grid wasn't fully filled.
-uint256 constant ARENA_TIMEOUT = 7 days / BLOCK_DURATION;
+uint256 constant ARENA_TIMEOUT = 7 days;
 
 // NOTE: all following prizes are expressed as a percentage of the total arena revenue.
 uint256 constant WINNER_PRIZE = 45;
@@ -35,9 +33,18 @@ uint256 constant PROTOCOL_FEE_PERCENT = 5;
 
 interface PaymentToken is IERC20, IERC20Permit {}
 
+/// A range of pixels in an arena.
+///
+/// `offset+length` must be less than or equal to the grid size of the arena.
+struct Range {
+  address owner;
+  uint offset;
+  uint length;
+}
+
 struct Arena {
-  /// The number of the block at which the arena was created.
-  uint creationBlockNumber;
+  /// The time at which the arena was created.
+  uint creationTimestamp;
   /// The user who created the arena.
   address owner;
   /// Name of team A.
@@ -62,14 +69,12 @@ struct Arena {
   uint32 teamBColor;
   /// Number of pixels in the grid.
   uint gridSize;
-  /// Number of pixels owned by team A.
-  uint teamA;
-  /// Number of pixels owned by team B.
-  uint teamB;
-  /// Number of pixels owned by each player in team A.
-  mapping(address => uint) countAByPlayer;
-  /// Number of pixels owned by each player in team B.
-  mapping(address => uint) countBByPlayer;
+  /// Ranges of pixels acquired by team A. These are ordered chronologically, so the offset of the
+  /// last range is always equal to the offset+length of the second-last.
+  Range[] teamA;
+  /// Ranges of pixels acquired by team B. These are ordered chronologically, so the offset of the
+  /// last range is always equal to the offset+length of the second-last.
+  Range[] teamB;
   /// The total revenue accumulated by the arena, including the initial creation fee. Post-drawing,
   /// players will start withdrawing their respective prizes from this balance.
   uint256 balance;
@@ -91,14 +96,82 @@ struct CreateArenaParams {
 }
 
 library ArenaMethods {
+  function getTeamACount(Arena storage arena) internal view returns (uint) {
+    Range storage lastRange = arena.teamA[arena.teamA.length - 1];
+    return lastRange.offset + lastRange.length;
+  }
+
+  function getTeamBCount(Arena storage arena) internal view returns (uint) {
+    Range storage lastRange = arena.teamB[arena.teamB.length - 1];
+    return lastRange.offset + lastRange.length;
+  }
+
   function getAvailablePixels(Arena storage arena) internal view returns (uint) {
-    return arena.gridSize - arena.teamA - arena.teamB;
+    uint teamACount = getTeamACount(arena);
+    uint teamBCount = getTeamBCount(arena);
+    assert(teamACount + teamBCount <= arena.gridSize);
+    return arena.gridSize - getTeamACount(arena) - getTeamBCount(arena);
   }
 
   function isOpen(Arena storage arena) internal view returns (bool) {
     return
-      arena.teamA + arena.teamB < arena.gridSize &&
-      block.number < arena.creationBlockNumber + ARENA_TIMEOUT;
+      getAvailablePixels(arena) > 0 && block.timestamp < arena.creationTimestamp + ARENA_TIMEOUT;
+  }
+
+  function acquirePixels(Arena storage arena, address player, uint count, bool teamB) internal {
+    uint teamACount = getTeamACount(arena);
+    uint teamBCount = getTeamBCount(arena);
+    assert(teamACount + teamBCount <= arena.gridSize);
+    require(teamACount + teamBCount + count <= arena.gridSize);
+    if (teamB) {
+      arena.teamB.push(Range({owner: player, offset: teamBCount, length: count}));
+    } else {
+      arena.teamA.push(Range({owner: player, offset: teamACount, length: count}));
+    }
+    arena.balance += PIXEL_FEE * count;
+  }
+
+  function getPixelOwner(
+    Arena storage arena,
+    uint index
+  ) internal view returns (address owner, bool teamB) {
+    uint teamACount = getTeamACount(arena);
+    uint teamBCount = getTeamBCount(arena);
+    assert(index < teamACount + teamBCount);
+    uint index2 = arena.gridSize - 1 - index;
+    if (index < teamACount) {
+      uint i = 0;
+      uint j = arena.teamA.length;
+      while (i < j) {
+        uint k = i + ((j - i) >> 1);
+        Range storage range = arena.teamA[k];
+        if (index < range.offset) {
+          j = k;
+        } else if (index >= range.offset + range.length) {
+          i = k + 1;
+        } else {
+          return (range.owner, false);
+        }
+      }
+    } else if (index2 < teamBCount) {
+      uint i = 0;
+      uint j = arena.teamB.length;
+      while (i < j) {
+        uint k = i + ((j - i) >> 1);
+        Range storage range = arena.teamB[k];
+        if (index2 < range.offset) {
+          j = k;
+        } else if (index2 >= range.offset + range.length) {
+          i = k + 1;
+        } else {
+          return (range.owner, true);
+        }
+      }
+    } else {
+      // index is in the gap
+      require(false);
+    }
+    assert(false);
   }
 
   function isCompleted(Arena storage arena) internal view returns (bool) {
@@ -165,7 +238,7 @@ contract PixelClash is
     uint id = arenas.length;
     arenas.push();
     Arena storage arena = arenas[id];
-    arena.creationBlockNumber = block.number;
+    arena.creationTimestamp = block.timestamp;
     arena.owner = owner;
     arena.teamAName = params.teamAName;
     arena.teamALogo = params.teamALogo;
@@ -202,18 +275,9 @@ contract PixelClash is
 
     uint256 fee = PIXEL_FEE * count;
     try token.permit(player, address(this), fee, deadline, v, r, s) {} catch {}
-
-    if (teamB) {
-      arena.teamB += count;
-      arena.countBByPlayer[player] += count;
-    } else {
-      arena.teamA += count;
-      arena.countAByPlayer[player] += count;
-    }
-    arena.balance += fee;
-
     token.safeTransferFrom(player, address(this), fee);
 
+    arena.acquirePixels(player, count, teamB);
     emit PurchasePixels(player, arenaId, teamB, count);
   }
 

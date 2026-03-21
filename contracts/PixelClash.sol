@@ -17,14 +17,28 @@ import "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 
 import "./Token.sol";
 
-// Arena creation fee in USD cents.
+// Arena states.
+uint256 constant ARENA_STATE_OPEN = 0;
+uint256 constant ARENA_STATE_FULL = 1;
+uint256 constant ARENA_STATE_TIMED_OUT = 2;
+uint256 constant ARENA_STATE_DRAWING = 3;
+uint256 constant ARENA_STATE_DRAWN = 4;
+
+// Arena creation fee in USD cents. Currently $20.
 uint256 constant ARENA_CREATION_FEE = 2000;
 
-// Fee for a single pixel in USD cents.
+// Price of a single pixel in USD cents. $1 = 1 pixel.
 uint256 constant PIXEL_FEE = 100;
 
 // All arenas are unlocked after this time even if the grid wasn't fully filled.
 uint256 constant ARENA_TIMEOUT = 7 days;
+
+// The ChainLink VRF will wait for this number of block confirmations before invoking our callback
+// with the randomness.
+uint16 constant VRF_REQUEST_CONFIRMATIONS = 10;
+
+// ChainLink VRF callback gas limit.
+uint32 constant VRF_CALLBACK_GAS_LIMIT = 1_000_000;
 
 // NOTE: all following prizes are expressed as a percentage of the total arena revenue.
 uint256 constant WINNER_PRIZE = 45;
@@ -45,13 +59,13 @@ interface CurrencyToken is IERC20, IERC20Metadata, IERC20Permit {}
 /// `offset+length` must be less than or equal to the grid size of the arena.
 struct Range {
   address owner;
-  uint offset;
-  uint length;
+  uint256 offset;
+  uint256 length;
 }
 
 struct Arena {
   /// The time at which the arena was created.
-  uint creationTimestamp;
+  uint256 creationTimestamp;
   /// The user who created the arena.
   address owner;
   /// Name of team A.
@@ -75,7 +89,7 @@ struct Arena {
   /// unused and must be zero.
   uint32 teamBColor;
   /// Number of pixels in the grid.
-  uint gridSize;
+  uint256 gridSize;
   /// Ranges of pixels acquired by team A. These are ordered chronologically, so the offset of the
   /// last range is always equal to the offset+length of the second-last.
   Range[] teamA;
@@ -85,9 +99,12 @@ struct Arena {
   /// The total revenue accumulated by the arena, including the initial creation fee. Post-drawing,
   /// players will start withdrawing their respective prizes from this balance.
   uint256 balance;
+  /// VRF request ID, returned by the VRF coordinator invocation. The VRF callback checks the
+  /// received request ID against this value and reverts if they differ.
+  uint256 vrfRequestId;
   /// Zero-based index of the winning pixel (must be less than gridSize). This is initialized to -1
   /// and is set to a valid index in the ChainLink VRF callback, when the winning pixel is drawn.
-  int winner;
+  int256 winner;
 }
 
 struct CreateArenaParams {
@@ -99,41 +116,56 @@ struct CreateArenaParams {
   string teamBLogo;
   bytes32 teamBLogoCid;
   uint32 teamBColor;
-  uint gridSize;
+  uint256 gridSize;
 }
 
 library ArenaMethods {
-  function getTeamACount(Arena storage arena) internal view returns (uint) {
+  function getTeamACount(Arena storage arena) internal view returns (uint256) {
     Range storage lastRange = arena.teamA[arena.teamA.length - 1];
     return lastRange.offset + lastRange.length;
   }
 
-  function getTeamBCount(Arena storage arena) internal view returns (uint) {
+  function getTeamBCount(Arena storage arena) internal view returns (uint256) {
     Range storage lastRange = arena.teamB[arena.teamB.length - 1];
     return lastRange.offset + lastRange.length;
   }
 
-  function getAvailablePixels(Arena storage arena) internal view returns (uint) {
-    uint teamACount = getTeamACount(arena);
-    uint teamBCount = getTeamBCount(arena);
+  function getAvailablePixels(Arena storage arena) internal view returns (uint256) {
+    uint256 teamACount = getTeamACount(arena);
+    uint256 teamBCount = getTeamBCount(arena);
     assert(teamACount + teamBCount <= arena.gridSize);
     return arena.gridSize - getTeamACount(arena) - getTeamBCount(arena);
   }
 
-  function isOpen(Arena storage arena) internal view returns (bool) {
-    return
-      getAvailablePixels(arena) > 0 && block.timestamp < arena.creationTimestamp + ARENA_TIMEOUT;
+  function isFull(Arena storage arena) private view returns (bool) {
+    return getAvailablePixels(arena) > 0;
+  }
+
+  function isTimedOut(Arena storage arena) private view returns (bool) {
+    return block.timestamp >= arena.creationTimestamp + ARENA_TIMEOUT;
+  }
+
+  function isDrawing(Arena storage arena) private view returns (bool) {
+    return arena.vrfRequestId != 0;
+  }
+
+  function hasWinner(Arena storage arena) private view returns (bool) {
+    return arena.winner >= 0;
+  }
+
+  function getState(Arena storage arena) internal view returns (uint256) {
+    // TODO
   }
 
   function acquirePixels(
     Arena storage arena,
     address player,
     uint256 pixelFee,
-    uint count,
+    uint256 count,
     bool teamB
   ) internal {
-    uint teamACount = getTeamACount(arena);
-    uint teamBCount = getTeamBCount(arena);
+    uint256 teamACount = getTeamACount(arena);
+    uint256 teamBCount = getTeamBCount(arena);
     assert(teamACount + teamBCount + count <= arena.gridSize);
     if (teamB) {
       arena.teamB.push(Range({owner: player, offset: teamBCount, length: count}));
@@ -145,17 +177,17 @@ library ArenaMethods {
 
   function getPixelOwner(
     Arena storage arena,
-    uint index
+    uint256 index
   ) internal view returns (address owner, bool teamB) {
-    uint teamACount = getTeamACount(arena);
-    uint teamBCount = getTeamBCount(arena);
+    uint256 teamACount = getTeamACount(arena);
+    uint256 teamBCount = getTeamBCount(arena);
     assert(index < teamACount + teamBCount);
-    uint index2 = arena.gridSize - 1 - index;
+    uint256 index2 = arena.gridSize - 1 - index;
     if (index < teamACount) {
-      uint i = 0;
-      uint j = arena.teamA.length;
+      uint256 i = 0;
+      uint256 j = arena.teamA.length;
       while (i < j) {
-        uint k = i + ((j - i) >> 1);
+        uint256 k = i + ((j - i) >> 1);
         Range storage range = arena.teamA[k];
         if (index < range.offset) {
           j = k;
@@ -166,10 +198,10 @@ library ArenaMethods {
         }
       }
     } else if (index2 < teamBCount) {
-      uint i = 0;
-      uint j = arena.teamB.length;
+      uint256 i = 0;
+      uint256 j = arena.teamB.length;
       while (i < j) {
-        uint k = i + ((j - i) >> 1);
+        uint256 k = i + ((j - i) >> 1);
         Range storage range = arena.teamB[k];
         if (index2 < range.offset) {
           j = k;
@@ -185,10 +217,6 @@ library ArenaMethods {
     }
     assert(false);
   }
-
-  function isCompleted(Arena storage arena) internal view returns (bool) {
-    return arena.winner >= 0;
-  }
 }
 
 contract PixelClash is
@@ -202,17 +230,19 @@ contract PixelClash is
   using SafeERC20 for CurrencyToken;
   using ArenaMethods for Arena;
 
-  event CreateArena(address indexed owner, uint indexed id);
+  event CreateArena(address indexed owner, uint256 indexed id);
 
   event PurchasePixels(
     address indexed player,
-    uint indexed arenaId,
+    uint256 indexed arenaId,
     bool indexed teamB,
-    uint count
+    uint256 count
   );
 
-  error InvalidArenaId(uint id);
-  error InvalidState(uint arenaId);
+  event VRFRequest(uint256 indexed arenaId, uint256 vrfRequestId);
+
+  error InvalidArenaId(uint256 id);
+  error InvalidState(uint256 arenaId, uint256 state);
   error OnlyCoordinatorCanFulfill(address have, address want);
   error OnlyOwnerOrCoordinator(address have, address owner, address coordinator);
   error ZeroAddress();
@@ -278,6 +308,10 @@ contract PixelClash is
     return (PIXEL_FEE * (10 ** currencyToken.decimals())) / 100;
   }
 
+  function arenaTimeOut() public pure returns (uint256) {
+    return ARENA_TIMEOUT;
+  }
+
   function createArenaWithPermit(
     CreateArenaParams calldata params,
     uint256 deadline,
@@ -289,7 +323,7 @@ contract PixelClash is
     uint256 fee = arenaCreationFee();
     try currencyToken.permit(owner, address(this), fee, deadline, v, r, s) {} catch {}
     currencyToken.safeTransferFrom(owner, address(this), fee);
-    uint id = arenas.length;
+    uint256 id = arenas.length;
     arenas.push();
     Arena storage arena = arenas[id];
     arena.creationTimestamp = block.timestamp;
@@ -309,9 +343,9 @@ contract PixelClash is
   }
 
   function purchasePixelsWithPermit(
-    uint arenaId,
+    uint256 arenaId,
     bool teamB,
-    uint count,
+    uint256 count,
     uint256 deadline,
     uint8 v,
     bytes32 r,
@@ -323,11 +357,11 @@ contract PixelClash is
       revert InvalidArenaId(arenaId);
     }
     Arena storage arena = arenas[arenaId];
-    if (!arena.isOpen()) {
-      revert InvalidState(arenaId);
+    if (arena.getState() != ARENA_STATE_OPEN) {
+      revert InvalidState(arenaId, arena.getState());
     }
 
-    uint availablePixels = arena.getAvailablePixels();
+    uint256 availablePixels = arena.getAvailablePixels();
     if (count > availablePixels) {
       count = availablePixels;
     }
@@ -340,14 +374,27 @@ contract PixelClash is
     emit PurchasePixels(player, arenaId, teamB, count);
   }
 
-  function draw(uint arenaId) public whenNotPaused nonReentrant {
+  function draw(uint256 arenaId, bytes32 vrfKeyHash) public whenNotPaused nonReentrant {
     if (arenaId >= arenas.length) {
       revert InvalidArenaId(arenaId);
     }
     Arena storage arena = arenas[arenaId];
-    if (arena.isOpen() || arena.isCompleted()) {
-      revert InvalidState(arenaId);
+    {
+      uint256 state = arena.getState();
+      if (state <= ARENA_STATE_OPEN || state >= ARENA_STATE_DRAWING) {
+        revert InvalidState(arenaId, state);
+      }
     }
-    // TODO: VRF request
+    arena.vrfRequestId = vrfCoordinator.requestRandomWords(
+      VRFV2PlusClient.RandomWordsRequest({
+        keyHash: vrfKeyHash,
+        subId: 0,
+        requestConfirmations: VRF_REQUEST_CONFIRMATIONS,
+        callbackGasLimit: VRF_CALLBACK_GAS_LIMIT,
+        numWords: 1,
+        extraArgs: VRFV2PlusClient._argsToBytes(VRFV2PlusClient.ExtraArgsV1({nativePayment: true}))
+      })
+    );
+    emit VRFRequest(arenaId, arena.vrfRequestId);
   }
 }

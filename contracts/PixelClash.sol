@@ -197,23 +197,25 @@ contract PixelClash is
     require(arena.isOpen());
 
     uint availablePixels = arena.getAvailablePixels();
-    uint adjustedCount = count > availablePixels ? availablePixels : count;
+    if (count > availablePixels) {
+      count = availablePixels;
+    }
 
-    uint256 fee = PIXEL_FEE * adjustedCount;
+    uint256 fee = PIXEL_FEE * count;
     try token.permit(player, address(this), fee, deadline, v, r, s) {} catch {}
 
     if (teamB) {
-      arena.teamB += adjustedCount;
-      arena.countBByPlayer[player] += adjustedCount;
+      arena.teamB += count;
+      arena.countBByPlayer[player] += count;
     } else {
-      arena.teamA += adjustedCount;
-      arena.countAByPlayer[player] += adjustedCount;
+      arena.teamA += count;
+      arena.countAByPlayer[player] += count;
     }
     arena.balance += fee;
 
     token.safeTransferFrom(player, address(this), fee);
 
-    emit PurchasePixels(player, arenaId, teamB, adjustedCount);
+    emit PurchasePixels(player, arenaId, teamB, count);
   }
 
   function draw(uint arenaId) public whenNotPaused nonReentrant {

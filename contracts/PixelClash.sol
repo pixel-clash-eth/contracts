@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.28;
 
-import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
-import {UUPSUpgradeable} from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
+import "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
+import "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFMigratableConsumerV2Plus.sol";
+import "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
 
-import {PixelToken} from "./Token.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
+
+import "./Token.sol";
 
 // Arena creation fee in USD cents.
 uint256 constant ARENA_CREATION_FEE = 2000;
@@ -34,7 +38,7 @@ uint256 constant ARENA_OWNER_PRIZE = 5;
 // Percentage of the arena revenue allocated to protocol fee.
 uint256 constant PROTOCOL_FEE_PERCENT = 5;
 
-interface PaymentToken is IERC20, IERC20Metadata, IERC20Permit {}
+interface CurrencyToken is IERC20, IERC20Metadata, IERC20Permit {}
 
 /// A range of pixels in an arena.
 ///
@@ -130,8 +134,7 @@ library ArenaMethods {
   ) internal {
     uint teamACount = getTeamACount(arena);
     uint teamBCount = getTeamBCount(arena);
-    assert(teamACount + teamBCount <= arena.gridSize);
-    require(teamACount + teamBCount + count <= arena.gridSize);
+    assert(teamACount + teamBCount + count <= arena.gridSize);
     if (teamB) {
       arena.teamB.push(Range({owner: player, offset: teamBCount, length: count}));
     } else {
@@ -193,9 +196,10 @@ contract PixelClash is
   OwnableUpgradeable,
   PausableUpgradeable,
   ReentrancyGuardTransient,
-  UUPSUpgradeable
+  UUPSUpgradeable,
+  IVRFMigratableConsumerV2Plus
 {
-  using SafeERC20 for PaymentToken;
+  using SafeERC20 for CurrencyToken;
   using ArenaMethods for Arena;
 
   event CreateArena(address indexed owner, uint indexed id);
@@ -207,11 +211,20 @@ contract PixelClash is
     uint count
   );
 
-  /// All payments and prizes are in this token.
-  PaymentToken public paymentToken;
+  error InvalidArenaId(uint id);
+  error InvalidState(uint arenaId);
+  error OnlyCoordinatorCanFulfill(address have, address want);
+  error OnlyOwnerOrCoordinator(address have, address owner, address coordinator);
+  error ZeroAddress();
 
-  /// All revenue is converted into this token and burned.
+  /// All payments and prizes are in this token.
+  CurrencyToken public currencyToken;
+
+  /// All revenue is converted to this token and burned.
   PixelToken public pixelToken;
+
+  /// @notice ChainLink VRF coordinator.
+  IVRFCoordinatorV2Plus public vrfCoordinator;
 
   /// List of arenas.
   Arena[] public arenas;
@@ -223,16 +236,31 @@ contract PixelClash is
 
   function initialize(
     address initialOwner,
-    PaymentToken paymentToken_,
+    CurrencyToken currencyToken_,
     PixelToken pixelToken_
   ) public initializer {
     __Ownable_init(initialOwner);
     __Pausable_init();
-    paymentToken = paymentToken_;
+    currencyToken = currencyToken_;
     pixelToken = pixelToken_;
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+
+  modifier onlyOwnerOrCoordinator() {
+    if (msg.sender != owner() && msg.sender != address(vrfCoordinator)) {
+      revert OnlyOwnerOrCoordinator(msg.sender, owner(), address(vrfCoordinator));
+    }
+    _;
+  }
+
+  function setCoordinator(address _vrfCoordinator) external override onlyOwnerOrCoordinator {
+    if (_vrfCoordinator == address(0)) {
+      revert ZeroAddress();
+    }
+    vrfCoordinator = IVRFCoordinatorV2Plus(_vrfCoordinator);
+    emit CoordinatorSet(_vrfCoordinator);
+  }
 
   function pause() public onlyOwner {
     _pause();
@@ -243,11 +271,11 @@ contract PixelClash is
   }
 
   function arenaCreationFee() public view returns (uint256) {
-    return (ARENA_CREATION_FEE * (10 ** paymentToken.decimals())) / 100;
+    return (ARENA_CREATION_FEE * (10 ** currencyToken.decimals())) / 100;
   }
 
   function pixelFee() public view returns (uint256) {
-    return (PIXEL_FEE * (10 ** paymentToken.decimals())) / 100;
+    return (PIXEL_FEE * (10 ** currencyToken.decimals())) / 100;
   }
 
   function createArenaWithPermit(
@@ -259,8 +287,8 @@ contract PixelClash is
   ) public whenNotPaused nonReentrant {
     address owner = msg.sender;
     uint256 fee = arenaCreationFee();
-    try paymentToken.permit(owner, address(this), fee, deadline, v, r, s) {} catch {}
-    paymentToken.safeTransferFrom(owner, address(this), fee);
+    try currencyToken.permit(owner, address(this), fee, deadline, v, r, s) {} catch {}
+    currencyToken.safeTransferFrom(owner, address(this), fee);
     uint id = arenas.length;
     arenas.push();
     Arena storage arena = arenas[id];
@@ -290,9 +318,14 @@ contract PixelClash is
     bytes32 s
   ) public whenNotPaused nonReentrant {
     address player = msg.sender;
-    require(arenaId < arenas.length);
+
+    if (arenaId >= arenas.length) {
+      revert InvalidArenaId(arenaId);
+    }
     Arena storage arena = arenas[arenaId];
-    require(arena.isOpen());
+    if (!arena.isOpen()) {
+      revert InvalidState(arenaId);
+    }
 
     uint availablePixels = arena.getAvailablePixels();
     if (count > availablePixels) {
@@ -300,17 +333,21 @@ contract PixelClash is
     }
 
     uint256 fee = pixelFee() * count;
-    try paymentToken.permit(player, address(this), fee, deadline, v, r, s) {} catch {}
-    paymentToken.safeTransferFrom(player, address(this), fee);
+    try currencyToken.permit(player, address(this), fee, deadline, v, r, s) {} catch {}
+    currencyToken.safeTransferFrom(player, address(this), fee);
 
     arena.acquirePixels(player, pixelFee(), count, teamB);
     emit PurchasePixels(player, arenaId, teamB, count);
   }
 
   function draw(uint arenaId) public whenNotPaused nonReentrant {
-    require(arenaId < arenas.length);
+    if (arenaId >= arenas.length) {
+      revert InvalidArenaId(arenaId);
+    }
     Arena storage arena = arenas[arenaId];
-    require(!arena.isOpen() && !arena.isCompleted());
+    if (arena.isOpen() || arena.isCompleted()) {
+      revert InvalidState(arenaId);
+    }
     // TODO: VRF request
   }
 }

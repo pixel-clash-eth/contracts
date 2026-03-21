@@ -11,6 +11,8 @@ import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC2
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 
+import {PixelToken} from "./Token.sol";
+
 // Arena creation fee in USD cents.
 uint256 constant ARENA_CREATION_FEE = 2000;
 
@@ -205,8 +207,11 @@ contract PixelClash is
     uint count
   );
 
-  /// All payments and prizes are this token.
-  PaymentToken public token;
+  /// All payments and prizes are in this token.
+  PaymentToken public paymentToken;
+
+  /// All revenue is converted into this token and burned.
+  PixelToken public pixelToken;
 
   /// List of arenas.
   Arena[] public arenas;
@@ -216,10 +221,15 @@ contract PixelClash is
     _disableInitializers();
   }
 
-  function initialize(address initialOwner, PaymentToken token_) public initializer {
+  function initialize(
+    address initialOwner,
+    PaymentToken paymentToken_,
+    PixelToken pixelToken_
+  ) public initializer {
     __Ownable_init(initialOwner);
     __Pausable_init();
-    token = token_;
+    paymentToken = paymentToken_;
+    pixelToken = pixelToken_;
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
@@ -233,11 +243,11 @@ contract PixelClash is
   }
 
   function arenaCreationFee() public view returns (uint256) {
-    return (ARENA_CREATION_FEE * (10 ** token.decimals())) / 100;
+    return (ARENA_CREATION_FEE * (10 ** paymentToken.decimals())) / 100;
   }
 
   function pixelFee() public view returns (uint256) {
-    return (PIXEL_FEE * (10 ** token.decimals())) / 100;
+    return (PIXEL_FEE * (10 ** paymentToken.decimals())) / 100;
   }
 
   function createArenaWithPermit(
@@ -249,8 +259,8 @@ contract PixelClash is
   ) public whenNotPaused nonReentrant {
     address owner = msg.sender;
     uint256 fee = arenaCreationFee();
-    try token.permit(owner, address(this), fee, deadline, v, r, s) {} catch {}
-    token.safeTransferFrom(owner, address(this), fee);
+    try paymentToken.permit(owner, address(this), fee, deadline, v, r, s) {} catch {}
+    paymentToken.safeTransferFrom(owner, address(this), fee);
     uint id = arenas.length;
     arenas.push();
     Arena storage arena = arenas[id];
@@ -290,8 +300,8 @@ contract PixelClash is
     }
 
     uint256 fee = pixelFee() * count;
-    try token.permit(player, address(this), fee, deadline, v, r, s) {} catch {}
-    token.safeTransferFrom(player, address(this), fee);
+    try paymentToken.permit(player, address(this), fee, deadline, v, r, s) {} catch {}
+    paymentToken.safeTransferFrom(player, address(this), fee);
 
     arena.acquirePixels(player, pixelFee(), count, teamB);
     emit PurchasePixels(player, arenaId, teamB, count);

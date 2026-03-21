@@ -6,12 +6,13 @@ import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/Pau
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 
 // Arena creation fee in USD cents.
-uint256 constant ARENA_CREATION_FEE = 2500;
+uint256 constant ARENA_CREATION_FEE = 2000;
 
 // Fee for a single pixel in USD cents.
 uint256 constant PIXEL_FEE = 100;
@@ -31,7 +32,7 @@ uint256 constant ARENA_OWNER_PRIZE = 5;
 // Percentage of the arena revenue allocated to protocol fee.
 uint256 constant PROTOCOL_FEE_PERCENT = 5;
 
-interface PaymentToken is IERC20, IERC20Permit {}
+interface PaymentToken is IERC20, IERC20Metadata, IERC20Permit {}
 
 /// A range of pixels in an arena.
 ///
@@ -118,7 +119,13 @@ library ArenaMethods {
       getAvailablePixels(arena) > 0 && block.timestamp < arena.creationTimestamp + ARENA_TIMEOUT;
   }
 
-  function acquirePixels(Arena storage arena, address player, uint count, bool teamB) internal {
+  function acquirePixels(
+    Arena storage arena,
+    address player,
+    uint256 pixelFee,
+    uint count,
+    bool teamB
+  ) internal {
     uint teamACount = getTeamACount(arena);
     uint teamBCount = getTeamBCount(arena);
     assert(teamACount + teamBCount <= arena.gridSize);
@@ -128,7 +135,7 @@ library ArenaMethods {
     } else {
       arena.teamA.push(Range({owner: player, offset: teamACount, length: count}));
     }
-    arena.balance += PIXEL_FEE * count;
+    arena.balance += pixelFee * count;
   }
 
   function getPixelOwner(
@@ -169,7 +176,7 @@ library ArenaMethods {
       }
     } else {
       // index is in the gap
-      require(false);
+      return (address(0), false);
     }
     assert(false);
   }
@@ -225,6 +232,14 @@ contract PixelClash is
     _unpause();
   }
 
+  function arenaCreationFee() public view returns (uint256) {
+    return (ARENA_CREATION_FEE * (10 ** token.decimals())) / 100;
+  }
+
+  function pixelFee() public view returns (uint256) {
+    return (PIXEL_FEE * (10 ** token.decimals())) / 100;
+  }
+
   function createArenaWithPermit(
     CreateArenaParams calldata params,
     uint256 deadline,
@@ -233,8 +248,9 @@ contract PixelClash is
     bytes32 s
   ) public whenNotPaused nonReentrant {
     address owner = msg.sender;
-    try token.permit(owner, address(this), ARENA_CREATION_FEE, deadline, v, r, s) {} catch {}
-    token.safeTransferFrom(owner, address(this), ARENA_CREATION_FEE);
+    uint256 fee = arenaCreationFee();
+    try token.permit(owner, address(this), fee, deadline, v, r, s) {} catch {}
+    token.safeTransferFrom(owner, address(this), fee);
     uint id = arenas.length;
     arenas.push();
     Arena storage arena = arenas[id];
@@ -249,7 +265,7 @@ contract PixelClash is
     arena.teamBLogoCid = params.teamBLogoCid;
     arena.teamBColor = params.teamBColor;
     arena.gridSize = params.gridSize;
-    arena.balance = ARENA_CREATION_FEE;
+    arena.balance = fee;
     arena.winner = -1;
     emit CreateArena(owner, id);
   }
@@ -273,11 +289,11 @@ contract PixelClash is
       count = availablePixels;
     }
 
-    uint256 fee = PIXEL_FEE * count;
+    uint256 fee = pixelFee() * count;
     try token.permit(player, address(this), fee, deadline, v, r, s) {} catch {}
     token.safeTransferFrom(player, address(this), fee);
 
-    arena.acquirePixels(player, count, teamB);
+    arena.acquirePixels(player, pixelFee(), count, teamB);
     emit PurchasePixels(player, arenaId, teamB, count);
   }
 

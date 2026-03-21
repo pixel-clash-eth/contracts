@@ -9,7 +9,7 @@ import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20P
 import {ERC20Votes} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Votes.sol";
 import {Nonces} from "@openzeppelin/contracts/utils/Nonces.sol";
 
-contract LotteryToken is ERC20, ERC20Burnable, ERC1363, ERC20Permit, ERC20Votes, ERC20FlashMint {
+contract Token is ERC20, ERC20Burnable, ERC1363, ERC20Permit, ERC20Votes, ERC20FlashMint {
   constructor(address recipient) ERC20("PixelClash", "PXC") ERC20Permit("PixelClash") {
     _mint(recipient, 1_000_000_000 * 10 ** decimals());
   }

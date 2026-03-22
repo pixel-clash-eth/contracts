@@ -113,16 +113,19 @@ struct CreateArenaParams {
 }
 
 library ArenaMethods {
+  /// Returns the number of pixels acquired by team A.
   function getTeamACount(Arena storage arena) internal view returns (uint256) {
     Range storage lastRange = arena.teamA[arena.teamA.length - 1];
     return lastRange.offset + lastRange.length;
   }
 
+  /// Returns the number of pixels acquired by team B.
   function getTeamBCount(Arena storage arena) internal view returns (uint256) {
     Range storage lastRange = arena.teamB[arena.teamB.length - 1];
     return lastRange.offset + lastRange.length;
   }
 
+  /// Returns the number of pixels still available for purchase (the size of the "gap").
   function getAvailablePixels(Arena storage arena) internal view returns (uint256) {
     uint256 teamACount = getTeamACount(arena);
     uint256 teamBCount = getTeamBCount(arena);
@@ -146,6 +149,7 @@ library ArenaMethods {
     return arena.winner >= 0;
   }
 
+  /// Returns the current state of the arena. See the `ARENA_STATE_*` constants at the top.
   function getState(Arena storage arena) internal view returns (uint256) {
     if (isTimedOut(arena)) {
       if (hasWinner(arena)) {
@@ -168,6 +172,16 @@ library ArenaMethods {
     }
   }
 
+  /// Acquires the given number of pixels.
+  ///
+  /// NOTE: `count` pixels MUST be available in the arena, otherwise this function will assert.
+  ///
+  /// @param arena The `Arena` instance.
+  /// @param player Address of the player acquiring the pixels.
+  /// @param pixelFee The cost of each pixel.
+  /// @param count The number of pixels to acquire.
+  /// @param teamB Whether tha player is playing in team A or B. If true, the pixels will be
+  ///   acquired by team B, otherwise they'll be acquire by team A.
   function acquirePixels(
     Arena storage arena,
     address player,
@@ -186,6 +200,14 @@ library ArenaMethods {
     arena.balance += pixelFee * count;
   }
 
+  /// Returns the owner of a given pixel.
+  ///
+  /// @param arena The `Arena` instance.
+  /// @param index The zero-based index of the pixel to query. Must be strictly less than
+  ///   `arena.gridSize`.
+  /// @return owner The owner of the pixel, or the zero address if the pixel is in the gap.
+  /// @return teamB Whether the pixel has been acquired by team A or B. Ignore this value if the
+  ///   pixel is in the gap.
   function getPixelOwner(
     Arena storage arena,
     uint256 index
@@ -255,6 +277,7 @@ contract PixelClash is
 
   error GridTooSmall(uint256 gridSize);
   error InvalidArenaId(uint256 id);
+  error InvalidArgument();
   error InvalidState(uint256 arenaId, uint256 state);
   error OnlyCoordinatorCanFulfill(address have, address want);
   error OnlyOwnerOrCoordinator(address have, address owner, address coordinator);
@@ -274,7 +297,7 @@ contract PixelClash is
   Arena[] public arenas;
 
   /// Arena IDs indexed by VRF request ID. Used to retrieve the correct arena in the VRF callback.
-  mapping(uint256 => uint256) arenaIdsByVrfRequestId;
+  mapping(uint256 => uint256) public arenaIdsByVrfRequestId;
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor() {
@@ -316,6 +339,16 @@ contract PixelClash is
     return ARENA_TIMEOUT;
   }
 
+  /// Creates a new pixel arena.
+  ///
+  /// Payment of a fee corresponding to `ARENA_CREATION_FEE` is required. The payment is carried out
+  /// via an ERC-2612 signature.
+  ///
+  /// @param params The arena creation parameters.
+  /// @param deadline The deadline of the ERC-2612 signature.
+  /// @param v The `v` parameter of the ERC-2612 signature.
+  /// @param r The `r` parameter of the ERC-2612 signature.
+  /// @param s The `s` parameter of the ERC-2612 signature.
   function createArenaWithPermit(
     CreateArenaParams calldata params,
     uint256 deadline,
@@ -354,6 +387,26 @@ contract PixelClash is
     emit PurchasePixels(owner, id, true, numPixelsPerTeam);
   }
 
+  /// Acquires one or more pixels in an arena.
+  ///
+  /// Payment of a fee corresponding to `PIXEL_FEE` multiplied by the number of pixels. The payment
+  /// is carried out via an ERC-2612 signature.
+  ///
+  /// Note that the arena must be in state `ARENA_STATE_OPEN`, otherwise this method will revert.
+  ///
+  /// If the number of available pixels is less than `count`, `count` will be automatically set to
+  /// the number of available pixels and the fee to pay will get adjusted accordingly. This avoids
+  /// that all transactions fail when many players try to purchase the last remaining pixels in an
+  /// arena roughly at the same time (ie. within the same block). One of the players will definitely
+  /// manage to acquire the remaining pixels and close the arena.
+  ///
+  /// @param arenaId The arena ID.
+  /// @param teamB If true the pixels will be acquired by team B, otherwise by team A.
+  /// @param count The number of pixels to acquire. Must be > 0.
+  /// @param deadline The deadline of the ERC-2612 signature.
+  /// @param v The `v` parameter of the ERC-2612 signature.
+  /// @param r The `r` parameter of the ERC-2612 signature.
+  /// @param s The `s` parameter of the ERC-2612 signature.
   function purchasePixelsWithPermit(
     uint256 arenaId,
     bool teamB,
@@ -373,6 +426,10 @@ contract PixelClash is
       revert InvalidState(arenaId, arena.getState());
     }
 
+    if (count == 0) {
+      revert InvalidArgument();
+    }
+
     uint256 availablePixels = arena.getAvailablePixels();
     if (count > availablePixels) {
       count = availablePixels;
@@ -386,10 +443,19 @@ contract PixelClash is
     emit PurchasePixels(player, arenaId, teamB, count);
   }
 
+  /// Returns the price of a draw in ETH.
   function getDrawPrice() public view returns (uint256) {
     return vrfConsumer.getRequestPrice(VRF_CALLBACK_GAS_LIMIT);
   }
 
+  /// Triggers the final drawing for an arena.
+  ///
+  /// This function call must be funded with the ETH value specified by `getDrawPrice`.
+  //
+  /// The transaction will fail if the arena is not in the `ARENA_STATE_FULL` or
+  /// `ARENA_STATE_TIMED_OUT` state.
+  ///
+  /// @param arenaId The ID of the arena.
   function draw(uint256 arenaId) public payable whenNotPaused nonReentrant {
     if (arenaId >= arenas.length) {
       revert InvalidArenaId(arenaId);

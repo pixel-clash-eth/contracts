@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.28;
 
-import "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFCoordinatorV2Plus.sol";
-import "@chainlink/contracts/src/v0.8/vrf/dev/interfaces/IVRFMigratableConsumerV2Plus.sol";
-import "@chainlink/contracts/src/v0.8/vrf/dev/libraries/VRFV2PlusClient.sol";
-
 import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts/proxy/utils/Initializable.sol";
@@ -16,6 +12,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 
 import "./Token.sol";
+import "./VRFConsumer.sol";
 
 // Arena states.
 uint256 constant ARENA_STATE_OPEN = 0;
@@ -32,10 +29,6 @@ uint256 constant PIXEL_FEE = 100;
 
 // All arenas are unlocked after this time even if the grid wasn't fully filled.
 uint256 constant ARENA_TIMEOUT = 7 days;
-
-// The ChainLink VRF will wait for this number of block confirmations before invoking our callback
-// with the randomness.
-uint16 constant VRF_REQUEST_CONFIRMATIONS = 10;
 
 // ChainLink VRF callback gas limit.
 uint32 constant VRF_CALLBACK_GAS_LIMIT = 1_000_000;
@@ -243,7 +236,7 @@ contract PixelClash is
   PausableUpgradeable,
   ReentrancyGuardTransient,
   UUPSUpgradeable,
-  IVRFMigratableConsumerV2Plus
+  VRFClient
 {
   using SafeERC20 for CurrencyToken;
   using ArenaMethods for Arena;
@@ -258,11 +251,14 @@ contract PixelClash is
   );
 
   event VRFRequest(uint256 indexed arenaId, uint256 vrfRequestId);
+  event ArenaClosure(uint256 indexed arenaId, uint256 vrfRequestId, uint256 winner);
 
+  error GridTooSmall(uint256 gridSize);
   error InvalidArenaId(uint256 id);
   error InvalidState(uint256 arenaId, uint256 state);
   error OnlyCoordinatorCanFulfill(address have, address want);
   error OnlyOwnerOrCoordinator(address have, address owner, address coordinator);
+  error PermissionDenied();
   error ZeroAddress();
 
   /// All payments and prizes are in this token.
@@ -271,11 +267,14 @@ contract PixelClash is
   /// All revenue is converted to this token and burned.
   PixelToken public pixelToken;
 
-  /// @notice ChainLink VRF coordinator.
-  IVRFCoordinatorV2Plus public vrfCoordinator;
+  /// ChainLink VRF consumer.
+  VRFConsumer public vrfConsumer;
 
   /// List of arenas.
   Arena[] public arenas;
+
+  /// Arena IDs indexed by VRF request ID. Used to retrieve the correct arena in the VRF callback.
+  mapping(uint256 => uint256) arenaIdsByVrfRequestId;
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor() {
@@ -285,30 +284,17 @@ contract PixelClash is
   function initialize(
     address initialOwner,
     CurrencyToken currencyToken_,
-    PixelToken pixelToken_
+    PixelToken pixelToken_,
+    address vrfCoordinator
   ) public initializer {
     __Ownable_init(initialOwner);
     __Pausable_init();
     currencyToken = currencyToken_;
     pixelToken = pixelToken_;
+    vrfConsumer = new VRFConsumer(vrfCoordinator);
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
-
-  modifier onlyOwnerOrCoordinator() {
-    if (msg.sender != owner() && msg.sender != address(vrfCoordinator)) {
-      revert OnlyOwnerOrCoordinator(msg.sender, owner(), address(vrfCoordinator));
-    }
-    _;
-  }
-
-  function setCoordinator(address _vrfCoordinator) external override onlyOwnerOrCoordinator {
-    if (_vrfCoordinator == address(0)) {
-      revert ZeroAddress();
-    }
-    vrfCoordinator = IVRFCoordinatorV2Plus(_vrfCoordinator);
-    emit CoordinatorSet(_vrfCoordinator);
-  }
 
   function pause() public onlyOwner {
     _pause();
@@ -357,7 +343,15 @@ contract PixelClash is
     arena.gridSize = params.gridSize;
     arena.balance = fee;
     arena.winner = -1;
+    uint256 numPixelsPerTeam = fee / pixelFee() / 2;
+    if (numPixelsPerTeam * 2 >= arena.gridSize) {
+      revert GridTooSmall(arena.gridSize);
+    }
+    arena.teamA.push(Range({owner: owner, offset: 0, length: numPixelsPerTeam}));
+    arena.teamB.push(Range({owner: owner, offset: 0, length: numPixelsPerTeam}));
     emit CreateArena(owner, id);
+    emit PurchasePixels(owner, id, false, numPixelsPerTeam);
+    emit PurchasePixels(owner, id, true, numPixelsPerTeam);
   }
 
   function purchasePixelsWithPermit(
@@ -392,7 +386,7 @@ contract PixelClash is
     emit PurchasePixels(player, arenaId, teamB, count);
   }
 
-  function draw(uint256 arenaId, bytes32 vrfKeyHash) public whenNotPaused nonReentrant {
+  function draw(uint256 arenaId, bytes32 vrfKeyHash) public payable whenNotPaused nonReentrant {
     if (arenaId >= arenas.length) {
       revert InvalidArenaId(arenaId);
     }
@@ -403,16 +397,34 @@ contract PixelClash is
         revert InvalidState(arenaId, state);
       }
     }
-    arena.vrfRequestId = vrfCoordinator.requestRandomWords(
-      VRFV2PlusClient.RandomWordsRequest({
-        keyHash: vrfKeyHash,
-        subId: 0,
-        requestConfirmations: VRF_REQUEST_CONFIRMATIONS,
-        callbackGasLimit: VRF_CALLBACK_GAS_LIMIT,
-        numWords: 1,
-        extraArgs: VRFV2PlusClient._argsToBytes(VRFV2PlusClient.ExtraArgsV1({nativePayment: true}))
-      })
+    arena.vrfRequestId = vrfConsumer.requestRandomness{value: msg.value}(
+      vrfKeyHash,
+      VRF_CALLBACK_GAS_LIMIT
     );
+    arenaIdsByVrfRequestId[arena.vrfRequestId] = arenaId;
     emit VRFRequest(arenaId, arena.vrfRequestId);
+  }
+
+  function fulfillRandomness(uint256 requestId, uint256 random) public {
+    if (address(msg.sender) != address(vrfConsumer)) {
+      revert PermissionDenied();
+    }
+
+    uint256 arenaId = arenaIdsByVrfRequestId[requestId];
+    Arena storage arena = arenas[arenaId];
+    if (arena.getState() != ARENA_STATE_DRAWING) {
+      revert InvalidState(arenaId, arena.getState());
+    }
+    assert(arena.vrfRequestId == requestId);
+
+    uint256 winner = random % arena.gridSize;
+    arena.winner = int256(winner);
+    arena.vrfRequestId = 0;
+
+    uint256 revenue = (arena.balance * PROTOCOL_FEE_PERCENT) / 100;
+    arena.balance -= revenue;
+    // TODO: burn revenue
+
+    emit ArenaClosure(arenaId, requestId, winner);
   }
 }

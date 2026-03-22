@@ -154,7 +154,25 @@ library ArenaMethods {
   }
 
   function getState(Arena storage arena) internal view returns (uint256) {
-    // TODO
+    if (isTimedOut(arena)) {
+      if (hasWinner(arena)) {
+        return ARENA_STATE_DRAWN;
+      } else if (isDrawing(arena)) {
+        return ARENA_STATE_DRAWING;
+      } else {
+        return ARENA_STATE_TIMED_OUT;
+      }
+    } else if (isFull(arena)) {
+      if (hasWinner(arena)) {
+        return ARENA_STATE_DRAWN;
+      } else if (isDrawing(arena)) {
+        return ARENA_STATE_DRAWING;
+      } else {
+        return ARENA_STATE_FULL;
+      }
+    } else {
+      return ARENA_STATE_OPEN;
+    }
   }
 
   function acquirePixels(

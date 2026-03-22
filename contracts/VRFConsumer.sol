@@ -26,7 +26,7 @@ contract VRFConsumer is VRFV2PlusWrapperConsumerBase {
   }
 
   function requestRandomness(uint32 callbackGasLimit) public payable returns (uint256 requestId) {
-    if (address(msg.sender) != address(client)) {
+    if (msg.sender != address(client)) {
       revert PermissionDenied();
     }
     (requestId, ) = requestRandomnessPayInNative(

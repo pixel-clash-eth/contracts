@@ -11,6 +11,15 @@ import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
+import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+
 import "./Token.sol";
 import "./VRFConsumer.sol";
 
@@ -258,7 +267,8 @@ contract PixelClash is
   PausableUpgradeable,
   ReentrancyGuardTransient,
   UUPSUpgradeable,
-  VRFClient
+  VRFClient,
+  IUnlockCallback
 {
   using SafeERC20 for CurrencyToken;
   using ArenaMethods for Arena;
@@ -293,6 +303,12 @@ contract PixelClash is
   /// ChainLink VRF consumer.
   VRFConsumer public vrfConsumer;
 
+  /// Uniswap V4 pool manager used to swap CurrencyToken for PixelToken.
+  IPoolManager public poolManager;
+
+  /// Uniswap V4 pool key identifying the CurrencyToken / PixelToken pool.
+  PoolKey public swapPoolKey;
+
   /// List of arenas.
   Arena[] public arenas;
 
@@ -308,13 +324,17 @@ contract PixelClash is
     address initialOwner,
     CurrencyToken currencyToken_,
     PixelToken pixelToken_,
-    address vrfCoordinator
+    address vrfCoordinator,
+    IPoolManager poolManager_,
+    PoolKey memory swapPoolKey_
   ) public initializer {
     __Ownable_init(initialOwner);
     __Pausable_init();
     currencyToken = currencyToken_;
     pixelToken = pixelToken_;
     vrfConsumer = new VRFConsumer(vrfCoordinator);
+    poolManager = poolManager_;
+    swapPoolKey = swapPoolKey_;
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
@@ -472,8 +492,12 @@ contract PixelClash is
     emit VRFRequest(arenaId, arena.vrfRequestId);
   }
 
-  function fulfillRandomness(uint256 requestId, uint256 random) public {
-    if (address(msg.sender) != address(vrfConsumer)) {
+  /// VRF callback.
+  ///
+  /// @param requestId The VRF request ID.
+  /// @param random The random word returned by the ChainLink VRF.
+  function fulfillRandomness(uint256 requestId, uint256 random) external {
+    if (msg.sender != address(vrfConsumer)) {
       revert PermissionDenied();
     }
 
@@ -490,8 +514,43 @@ contract PixelClash is
 
     uint256 revenue = (arena.balance * PROTOCOL_FEE_PERCENT) / 100;
     arena.balance -= revenue;
-    // TODO: burn revenue
+    uint256 pixelAmount = abi.decode(poolManager.unlock(abi.encode(revenue)), (uint256));
+    pixelToken.burn(pixelAmount);
 
     emit ArenaClosure(arenaId, requestId, winner);
+  }
+
+  /// @inheritdoc IUnlockCallback
+  function unlockCallback(bytes calldata data) external returns (bytes memory) {
+    if (msg.sender != address(poolManager)) {
+      revert PermissionDenied();
+    }
+
+    uint256 revenue = abi.decode(data, (uint256));
+    bool zeroForOne = Currency.unwrap(swapPoolKey.currency0) == address(currencyToken);
+
+    BalanceDelta delta = poolManager.swap(
+      swapPoolKey,
+      SwapParams({
+        zeroForOne: zeroForOne,
+        amountSpecified: -int256(revenue),
+        sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+      }),
+      ""
+    );
+
+    // Settle: sync balance checkpoint, transfer tokens in, then acknowledge.
+    Currency currencyIn = zeroForOne ? swapPoolKey.currency0 : swapPoolKey.currency1;
+    poolManager.sync(currencyIn);
+    currencyToken.safeTransfer(address(poolManager), revenue);
+    poolManager.settle();
+
+    // Take the output tokens from the pool manager.
+    uint256 pixelAmount =
+      zeroForOne ? uint256(uint128(delta.amount1())) : uint256(uint128(delta.amount0()));
+    Currency currencyOut = zeroForOne ? swapPoolKey.currency1 : swapPoolKey.currency0;
+    poolManager.take(currencyOut, address(this), pixelAmount);
+
+    return abi.encode(pixelAmount);
   }
 }

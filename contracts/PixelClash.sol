@@ -386,7 +386,11 @@ contract PixelClash is
     emit PurchasePixels(player, arenaId, teamB, count);
   }
 
-  function draw(uint256 arenaId, bytes32 vrfKeyHash) public payable whenNotPaused nonReentrant {
+  function getDrawPrice() public view returns (uint256) {
+    return vrfConsumer.getRequestPrice(VRF_CALLBACK_GAS_LIMIT);
+  }
+
+  function draw(uint256 arenaId) public payable whenNotPaused nonReentrant {
     if (arenaId >= arenas.length) {
       revert InvalidArenaId(arenaId);
     }
@@ -397,10 +401,7 @@ contract PixelClash is
         revert InvalidState(arenaId, state);
       }
     }
-    arena.vrfRequestId = vrfConsumer.requestRandomness{value: msg.value}(
-      vrfKeyHash,
-      VRF_CALLBACK_GAS_LIMIT
-    );
+    arena.vrfRequestId = vrfConsumer.requestRandomness{value: msg.value}(VRF_CALLBACK_GAS_LIMIT);
     arenaIdsByVrfRequestId[arena.vrfRequestId] = arenaId;
     emit VRFRequest(arenaId, arena.vrfRequestId);
   }

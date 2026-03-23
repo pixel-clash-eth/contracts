@@ -97,8 +97,8 @@ struct Arena {
   /// last range is always equal to the offset+length of the second-last.
   Range[] teamB;
   /// The total revenue accumulated by the arena, including the initial creation fee.
-  uint256 income;
-  /// The current balance of the arena, equal to `income` minus anything that has been withdrawn.
+  uint256 revenue;
+  /// The current balance of the arena, equal to `revenue` minus anything that has been withdrawn.
   uint256 balance;
   /// VRF request ID, returned by the VRF coordinator invocation. The VRF callback checks the
   /// received request ID against this value and reverts if they differ.
@@ -205,9 +205,9 @@ library ArenaMethods {
     } else {
       arena.teamA.push(Range({owner: player, offset: teamACount, length: count}));
     }
-    uint256 income = pixelFee * count;
-    arena.income += income;
-    arena.balance += income;
+    uint256 fee = pixelFee * count;
+    arena.revenue += fee;
+    arena.balance += fee;
   }
 
   /// Returns the owner of a given pixel.
@@ -261,34 +261,38 @@ library ArenaMethods {
     assert(false);
   }
 
+  /// Returns the prize for the winner (the player owning the winning pixel).
   function getWinnerPrize(Arena storage arena) internal view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
-    return (arena.income * WINNER_PRIZE) / 100;
+    return (arena.revenue * WINNER_PRIZE) / 100;
   }
 
+  /// Returns the prize for the team owning the winning pixel.
   function getTeamPrize(Arena storage arena) internal view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
-    return (arena.income * TEAM_PRIZE) / 100;
+    return (arena.revenue * TEAM_PRIZE) / 100;
   }
 
+  /// Returns the prize for the referrer of the winner, or zero if the winner had no referrer.
   function getSponsorPrize(Arena storage arena) internal view returns (uint256) {
-    assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
-    return (arena.income * SPONSOR_PRIZE) / 100;
+    assert(getState(arena) >= ARENA_STATE_DRAWN);
+    // TODO: implement referrals.
+    return 0;
   }
 
   function getTopReferralPrize1(Arena storage arena) internal view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
-    return (arena.income * TOP_REFERRAL_PRIZE_1) / 100;
+    return (arena.revenue * TOP_REFERRAL_PRIZE_1) / 100;
   }
 
   function getTopReferralPrize2(Arena storage arena) internal view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
-    return (arena.income * TOP_REFERRAL_PRIZE_2) / 100;
+    return (arena.revenue * TOP_REFERRAL_PRIZE_2) / 100;
   }
 
   function getTopReferralPrize3(Arena storage arena) internal view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
-    return (arena.income * TOP_REFERRAL_PRIZE_3) / 100;
+    return (arena.revenue * TOP_REFERRAL_PRIZE_3) / 100;
   }
 
   function getTopReferralPrize(Arena storage arena) internal view returns (uint256) {
@@ -297,10 +301,12 @@ library ArenaMethods {
 
   function getArenaOwnerPrize(Arena storage arena) internal view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
-    return (arena.income * ARENA_OWNER_PRIZE) / 100;
+    return (arena.revenue * ARENA_OWNER_PRIZE) / 100;
   }
 
+  /// Returns the sum of all prizes, which is 95% of the arena revenue.
   function getTotalPrizes(Arena storage arena) internal view returns (uint256) {
+    assert(getState(arena) >= ARENA_STATE_DRAWN);
     return
       getWinnerPrize(arena) +
       getTeamPrize(arena) +
@@ -443,7 +449,7 @@ contract PixelClash is
     arena.teamBLogoCid = params.teamBLogoCid;
     arena.teamBColor = params.teamBColor;
     arena.gridSize = params.gridSize;
-    arena.income = fee;
+    arena.revenue = fee;
     arena.balance = fee;
     arena.winner = -1;
     uint256 numPixelsPerTeam = fee / pixelFee() / 2;
@@ -562,7 +568,7 @@ contract PixelClash is
     arena.winner = int256(winner);
     arena.vrfRequestId = 0;
 
-    uint256 revenue = arena.income - arena.getTotalPrizes();
+    uint256 revenue = arena.revenue - arena.getTotalPrizes();
     arena.balance -= revenue;
     uint256 pixelAmount = abi.decode(poolManager.unlock(abi.encode(revenue)), (uint256));
     pixelToken.burn(pixelAmount);

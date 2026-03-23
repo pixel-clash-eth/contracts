@@ -1,5 +1,11 @@
 import { ethers, upgrades } from "hardhat";
 
+// Uniswap V4 requires currency0 < currency1. Note that lexicographic order of normalized Ethereum
+// addresses is the same as numeric order.
+function orderCurrencies(a: string, b: string): [string, string] {
+  return a.toLowerCase() < b.toLowerCase() ? [a, b] : [b, a];
+}
+
 async function main() {
   // ─── Env validation ──────────────────────────────────────────────────────────
   function requireEnv(name: string): string {
@@ -14,8 +20,6 @@ async function main() {
   const currencyTokenAddress = requireEnv("CURRENCY_TOKEN");
   const vrfWrapperAddress = requireEnv("CHAIN_LINK_VRF_WRAPPER");
   const poolManagerAddress = requireEnv("UNISWAP_V4_POOL_MANAGER");
-  const poolCurrency0 = requireEnv("POOL_CURRENCY0");
-  const poolCurrency1 = requireEnv("POOL_CURRENCY1");
   const poolFee = requireEnv("POOL_FEE");
   const poolTickSpacing = requireEnv("POOL_TICK_SPACING");
   const poolHooks = process.env.POOL_HOOKS ?? ethers.ZeroAddress;
@@ -32,9 +36,10 @@ async function main() {
   console.log(`PixelToken:      ${pixelTokenAddress}`);
 
   // ─── 2. PixelClash (UUPS proxy) ──────────────────────────────────────────────
+  const [currency0, currency1] = orderCurrencies(currencyTokenAddress, pixelTokenAddress);
   const swapPoolKey = {
-    currency0: poolCurrency0,
-    currency1: poolCurrency1,
+    currency0,
+    currency1,
     fee: Number(poolFee),
     tickSpacing: Number(poolTickSpacing),
     hooks: poolHooks,

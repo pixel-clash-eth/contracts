@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.28;
 
-import "@openzeppelin/contracts/governance/TimelockController.sol";
+import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 
-import "./PixelClash.sol";
+import {PixelClash} from "./PixelClash.sol";
 
 contract PixelController is TimelockController {
   PixelClash public immutable pixelClash;

@@ -96,6 +96,12 @@ struct Arena {
   /// Ranges of pixels acquired by team B. These are ordered chronologically, so the offset of the
   /// last range is always equal to the offset+length of the second-last.
   Range[] teamB;
+  /// The number of pixels acquired by each player on team A. Must be consistent with the `teamA`
+  /// ranges.
+  mapping(address => uint256) teamAShares;
+  /// The number of pixels acquired by each player on team B. Must be consistent with the `teamB`
+  /// ranges.
+  mapping(address => uint256) teamBShares;
   /// The total revenue accumulated by the arena, including the initial creation fee.
   uint256 revenue;
   /// The current balance of the arena, equal to `revenue` minus anything that has been withdrawn.
@@ -106,6 +112,9 @@ struct Arena {
   /// Zero-based index of the winning pixel (must be less than gridSize). This is initialized to -1
   /// and is set to a valid index in the ChainLink VRF callback, when the winning pixel is drawn.
   int256 winner;
+  /// Prize amounts withdrawn by each one involved. Note that the sum of all values stored here must
+  /// equal `revenue - balance`.
+  mapping(address => uint256) withdrawals;
 }
 
 struct CreateArenaParams {
@@ -122,19 +131,19 @@ struct CreateArenaParams {
 
 library ArenaMethods {
   /// Returns the number of pixels acquired by team A.
-  function getTeamACount(Arena storage arena) internal view returns (uint256) {
+  function getTeamACount(Arena storage arena) public view returns (uint256) {
     Range storage lastRange = arena.teamA[arena.teamA.length - 1];
     return lastRange.offset + lastRange.length;
   }
 
   /// Returns the number of pixels acquired by team B.
-  function getTeamBCount(Arena storage arena) internal view returns (uint256) {
+  function getTeamBCount(Arena storage arena) public view returns (uint256) {
     Range storage lastRange = arena.teamB[arena.teamB.length - 1];
     return lastRange.offset + lastRange.length;
   }
 
   /// Returns the number of pixels still available for purchase (the size of the "gap").
-  function getAvailablePixels(Arena storage arena) internal view returns (uint256) {
+  function getAvailablePixels(Arena storage arena) public view returns (uint256) {
     uint256 teamACount = getTeamACount(arena);
     uint256 teamBCount = getTeamBCount(arena);
     assert(teamACount + teamBCount <= arena.gridSize);
@@ -158,7 +167,7 @@ library ArenaMethods {
   }
 
   /// Returns the current state of the arena. See the `ARENA_STATE_*` constants at the top.
-  function getState(Arena storage arena) internal view returns (uint256) {
+  function getState(Arena storage arena) public view returns (uint256) {
     if (isTimedOut(arena)) {
       if (hasWinner(arena)) {
         return ARENA_STATE_DRAWN;
@@ -202,8 +211,10 @@ library ArenaMethods {
     assert(teamACount + teamBCount + count <= arena.gridSize);
     if (teamB) {
       arena.teamB.push(Range({owner: player, offset: teamBCount, length: count}));
+      arena.teamBShares[player] += count;
     } else {
       arena.teamA.push(Range({owner: player, offset: teamACount, length: count}));
+      arena.teamAShares[player] += count;
     }
     uint256 fee = pixelFee * count;
     arena.revenue += fee;
@@ -221,7 +232,7 @@ library ArenaMethods {
   function getPixelOwner(
     Arena storage arena,
     uint256 index
-  ) internal view returns (address owner, bool teamB) {
+  ) public view returns (address owner, bool teamB) {
     uint256 teamACount = getTeamACount(arena);
     uint256 teamBCount = getTeamBCount(arena);
     assert(index < teamACount + teamBCount);
@@ -261,51 +272,65 @@ library ArenaMethods {
     assert(false);
   }
 
+  /// Indicates whether team A won.
+  function teamAWins(Arena storage arena) public view returns (bool) {
+    assert(getState(arena) >= ARENA_STATE_DRAWN);
+    uint256 teamACount = getTeamACount(arena);
+    return uint256(arena.winner) < teamACount;
+  }
+
+  /// Indicates whether team B won.
+  function teamBWins(Arena storage arena) public view returns (bool) {
+    assert(getState(arena) >= ARENA_STATE_DRAWN);
+    uint256 teamBCount = getTeamBCount(arena);
+    return uint256(arena.winner) >= arena.gridSize - teamBCount;
+  }
+
   /// Returns the prize for the winner (the player owning the winning pixel).
-  function getWinnerPrize(Arena storage arena) internal view returns (uint256) {
+  function getWinnerPrize(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
     return (arena.revenue * WINNER_PRIZE) / 100;
   }
 
   /// Returns the prize for the team owning the winning pixel.
-  function getTeamPrize(Arena storage arena) internal view returns (uint256) {
+  function getTeamPrize(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
     return (arena.revenue * TEAM_PRIZE) / 100;
   }
 
   /// Returns the prize for the referrer of the winner, or zero if the winner had no referrer.
-  function getSponsorPrize(Arena storage arena) internal view returns (uint256) {
+  function getSponsorPrize(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
     // TODO: implement referrals.
     return 0;
   }
 
-  function getTopReferralPrize1(Arena storage arena) internal view returns (uint256) {
+  function getTopReferralPrize1(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
     return (arena.revenue * TOP_REFERRAL_PRIZE_1) / 100;
   }
 
-  function getTopReferralPrize2(Arena storage arena) internal view returns (uint256) {
+  function getTopReferralPrize2(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
     return (arena.revenue * TOP_REFERRAL_PRIZE_2) / 100;
   }
 
-  function getTopReferralPrize3(Arena storage arena) internal view returns (uint256) {
+  function getTopReferralPrize3(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
     return (arena.revenue * TOP_REFERRAL_PRIZE_3) / 100;
   }
 
-  function getTopReferralPrize(Arena storage arena) internal view returns (uint256) {
+  function getTopReferralPrize(Arena storage arena) public view returns (uint256) {
     return getTopReferralPrize1(arena) + getTopReferralPrize2(arena) + getTopReferralPrize3(arena);
   }
 
-  function getArenaOwnerPrize(Arena storage arena) internal view returns (uint256) {
+  function getArenaOwnerPrize(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
     return (arena.revenue * ARENA_OWNER_PRIZE) / 100;
   }
 
   /// Returns the sum of all prizes, which is 95% of the arena revenue.
-  function getTotalPrizes(Arena storage arena) internal view returns (uint256) {
+  function getTotalPrizes(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
     return
       getWinnerPrize(arena) +
@@ -313,6 +338,16 @@ library ArenaMethods {
       getSponsorPrize(arena) +
       getTopReferralPrize(arena) +
       getArenaOwnerPrize(arena);
+  }
+
+  /// Returns the total prizes won by a player in this arena.
+  function getTotalPrizeFor(Arena storage arena, address player) public view returns (uint256) {
+    assert(getState(arena) >= ARENA_STATE_DRAWN);
+    (address winner, bool teamB) = getPixelOwner(arena, uint256(arena.winner));
+    uint256 winnerPrize = (player != winner) ? 0 : getWinnerPrize(arena);
+    uint256 teamPrize = (teamB != teamBWins(arena)) ? 0 : getTeamPrize(arena);
+    uint256 ownerPrize = (player != arena.owner) ? 0 : getArenaOwnerPrize(arena);
+    return winnerPrize + teamPrize + ownerPrize;
   }
 }
 
@@ -340,10 +375,12 @@ contract PixelClash is
   event VRFRequest(uint256 indexed arenaId, uint256 vrfRequestId);
   event ArenaClosure(uint256 indexed arenaId, uint256 vrfRequestId, uint256 winner);
 
+  error AlreadyWithdrawn(uint256 arenaId, address player);
   error GridTooSmall(uint256 gridSize);
   error InvalidArenaId(uint256 id);
   error InvalidArgument();
   error InvalidState(uint256 arenaId, uint256 state);
+  error NoPrize(uint256 arenaId, address player);
   error OnlyCoordinatorCanFulfill(address have, address want);
   error OnlyOwnerOrCoordinator(address have, address owner, address coordinator);
   error PermissionDenied();
@@ -457,7 +494,9 @@ contract PixelClash is
       revert GridTooSmall(arena.gridSize);
     }
     arena.teamA.push(Range({owner: owner, offset: 0, length: numPixelsPerTeam}));
+    arena.teamAShares[owner] += numPixelsPerTeam;
     arena.teamB.push(Range({owner: owner, offset: 0, length: numPixelsPerTeam}));
+    arena.teamBShares[owner] += numPixelsPerTeam;
     emit CreateArena(owner, id);
     emit PurchasePixels(owner, id, false, numPixelsPerTeam);
     emit PurchasePixels(owner, id, true, numPixelsPerTeam);
@@ -608,5 +647,52 @@ contract PixelClash is
     poolManager.take(currencyOut, address(this), pixelAmount);
 
     return abi.encode(pixelAmount);
+  }
+
+  /// Returns the total prizes won by a player in the given arena.
+  ///
+  /// Reverts if the arena hasn't received its draw yet.
+  function getPrizeFor(uint256 arenaId, address player) public view returns (uint256) {
+    if (arenaId >= arenas.length) {
+      revert InvalidArenaId(arenaId);
+    }
+    Arena storage arena = arenas[arenaId];
+    {
+      uint256 state = arena.getState();
+      if (state < ARENA_STATE_DRAWN) {
+        revert InvalidState(arenaId, state);
+      }
+    }
+    return arena.getTotalPrizeFor(player);
+  }
+
+  /// Withdraws the prize for the caller from the specified arena, if any.
+  ///
+  /// The amount returned by `getPrize` for the same arena is transferred to the caller if it hasn't
+  /// been transferred before. If the amount is zero (ie. the player didn't win anything from that
+  /// arena) the transaction is reverted.
+  function withdrawPrize(uint256 arenaId) public whenNotPaused nonReentrant {
+    address player = msg.sender;
+    if (arenaId >= arenas.length) {
+      revert InvalidArenaId(arenaId);
+    }
+    Arena storage arena = arenas[arenaId];
+    {
+      uint256 state = arena.getState();
+      if (state < ARENA_STATE_DRAWN) {
+        revert InvalidState(arenaId, state);
+      }
+    }
+    uint256 prize = arena.getTotalPrizeFor(player);
+    if (prize == 0) {
+      revert NoPrize(arenaId, player);
+    }
+    if (arena.withdrawals[player] >= prize) {
+      revert AlreadyWithdrawn(arenaId, player);
+    }
+    uint256 amount = prize - arena.withdrawals[player];
+    arena.balance -= amount;
+    arena.withdrawals[player] += amount;
+    currencyToken.safeTransfer(player, amount);
   }
 }

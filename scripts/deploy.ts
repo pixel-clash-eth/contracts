@@ -24,7 +24,9 @@ async function main() {
   const poolTickSpacing = requireEnv("POOL_TICK_SPACING");
   const poolHooks = process.env.POOL_HOOKS ?? ethers.ZeroAddress;
 
-  const [deployer] = await ethers.getSigners();
+  const deployer = process.env.DEPLOYER_PRIVATE_KEY
+    ? new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY, ethers.provider)
+    : (await ethers.getSigners())[0];
   console.log(`Deployer: ${deployer.address}`);
   console.log(`Owner:    ${ownerAddress}`);
 

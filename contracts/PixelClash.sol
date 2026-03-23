@@ -42,7 +42,8 @@ uint256 constant ARENA_TIMEOUT = 7 days;
 // ChainLink VRF callback gas limit.
 uint32 constant VRF_CALLBACK_GAS_LIMIT = 1_000_000;
 
-// NOTE: all following prizes are expressed as a percentage of the total arena revenue.
+// NOTE: all following prizes are expressed as a percentage of the total arena revenue. Prizes add
+// up to 95% of the revenue, with the remaining 5% being the protocol fee.
 uint256 constant WINNER_PRIZE = 45;
 uint256 constant TEAM_PRIZE = 25;
 uint256 constant SPONSOR_PRIZE = 10;
@@ -50,9 +51,6 @@ uint256 constant TOP_REFERRAL_PRIZE_1 = 6;
 uint256 constant TOP_REFERRAL_PRIZE_2 = 3;
 uint256 constant TOP_REFERRAL_PRIZE_3 = 1;
 uint256 constant ARENA_OWNER_PRIZE = 5;
-
-// Percentage of the arena revenue allocated to protocol fee.
-uint256 constant PROTOCOL_FEE_PERCENT = 5;
 
 interface CurrencyToken is IERC20, IERC20Metadata, IERC20Permit {}
 
@@ -98,8 +96,9 @@ struct Arena {
   /// Ranges of pixels acquired by team B. These are ordered chronologically, so the offset of the
   /// last range is always equal to the offset+length of the second-last.
   Range[] teamB;
-  /// The total revenue accumulated by the arena, including the initial creation fee. Post-drawing,
-  /// players will start withdrawing their respective prizes from this balance.
+  /// The total revenue accumulated by the arena, including the initial creation fee.
+  uint256 income;
+  /// The current balance of the arena, equal to `income` minus anything that has been withdrawn.
   uint256 balance;
   /// VRF request ID, returned by the VRF coordinator invocation. The VRF callback checks the
   /// received request ID against this value and reverts if they differ.
@@ -206,7 +205,9 @@ library ArenaMethods {
     } else {
       arena.teamA.push(Range({owner: player, offset: teamACount, length: count}));
     }
-    arena.balance += pixelFee * count;
+    uint256 income = pixelFee * count;
+    arena.income += income;
+    arena.balance += income;
   }
 
   /// Returns the owner of a given pixel.
@@ -258,6 +259,54 @@ library ArenaMethods {
       return (address(0), false);
     }
     assert(false);
+  }
+
+  function getWinnerPrize(Arena storage arena) internal view returns (uint256) {
+    assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
+    return (arena.income * WINNER_PRIZE) / 100;
+  }
+
+  function getTeamPrize(Arena storage arena) internal view returns (uint256) {
+    assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
+    return (arena.income * TEAM_PRIZE) / 100;
+  }
+
+  function getSponsorPrize(Arena storage arena) internal view returns (uint256) {
+    assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
+    return (arena.income * SPONSOR_PRIZE) / 100;
+  }
+
+  function getTopReferralPrize1(Arena storage arena) internal view returns (uint256) {
+    assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
+    return (arena.income * TOP_REFERRAL_PRIZE_1) / 100;
+  }
+
+  function getTopReferralPrize2(Arena storage arena) internal view returns (uint256) {
+    assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
+    return (arena.income * TOP_REFERRAL_PRIZE_2) / 100;
+  }
+
+  function getTopReferralPrize3(Arena storage arena) internal view returns (uint256) {
+    assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
+    return (arena.income * TOP_REFERRAL_PRIZE_3) / 100;
+  }
+
+  function getTopReferralPrize(Arena storage arena) internal view returns (uint256) {
+    return getTopReferralPrize1(arena) + getTopReferralPrize2(arena) + getTopReferralPrize3(arena);
+  }
+
+  function getArenaOwnerPrize(Arena storage arena) internal view returns (uint256) {
+    assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
+    return (arena.income * ARENA_OWNER_PRIZE) / 100;
+  }
+
+  function getTotalPrizes(Arena storage arena) internal view returns (uint256) {
+    return
+      getWinnerPrize(arena) +
+      getTeamPrize(arena) +
+      getSponsorPrize(arena) +
+      getTopReferralPrize(arena) +
+      getArenaOwnerPrize(arena);
   }
 }
 
@@ -394,6 +443,7 @@ contract PixelClash is
     arena.teamBLogoCid = params.teamBLogoCid;
     arena.teamBColor = params.teamBColor;
     arena.gridSize = params.gridSize;
+    arena.income = fee;
     arena.balance = fee;
     arena.winner = -1;
     uint256 numPixelsPerTeam = fee / pixelFee() / 2;
@@ -512,7 +562,7 @@ contract PixelClash is
     arena.winner = int256(winner);
     arena.vrfRequestId = 0;
 
-    uint256 revenue = (arena.balance * PROTOCOL_FEE_PERCENT) / 100;
+    uint256 revenue = arena.income - arena.getTotalPrizes();
     arena.balance -= revenue;
     uint256 pixelAmount = abi.decode(poolManager.unlock(abi.encode(revenue)), (uint256));
     pixelToken.burn(pixelAmount);

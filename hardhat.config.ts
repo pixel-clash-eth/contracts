@@ -14,6 +14,7 @@ const config: HardhatUserConfig = {
         revertStrings: "strip",
       },
       evmVersion: "cancun",
+      viaIR: true,
     },
   },
 };

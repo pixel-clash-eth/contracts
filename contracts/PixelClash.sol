@@ -237,7 +237,7 @@ library ArenaMethods {
   ) public view returns (address owner, bool teamB) {
     uint256 teamACount = getTeamACount(arena);
     uint256 teamBCount = getTeamBCount(arena);
-    assert(index < teamACount + teamBCount);
+    assert(index < arena.gridSize);
     uint256 index2 = arena.gridSize - 1 - index;
     if (index < teamACount) {
       uint256 i = 0;
@@ -628,14 +628,14 @@ contract PixelClash is
     if (msg.value < price) {
       revert IncorrectPaymentAmount(msg.value, price);
     }
-    uint256 refund = price - msg.value;
+    uint256 refund = msg.value - price;
 
     arena.vrfRequestId = vrfConsumer.requestRandomness{value: price}(VRF_CALLBACK_GAS_LIMIT);
     arenaIdsByVrfRequestId[arena.vrfRequestId] = arenaId;
 
-    payable(msg.sender).sendValue(refund);
-
     emit VRFRequest(arenaId, arena.vrfRequestId);
+
+    payable(msg.sender).sendValue(refund);
   }
 
   /// VRF callback.

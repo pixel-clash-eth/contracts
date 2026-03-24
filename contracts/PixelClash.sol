@@ -25,6 +25,8 @@ import {ReferralHeap, ReferralHeapMethods, ReferralRevenue} from "./Heap.sol";
 import {PixelToken} from "./Token.sol";
 import {VRFClient, VRFConsumer} from "./VRFConsumer.sol";
 
+using ReferralHeapMethods for ReferralHeap;
+
 // Arena states.
 uint256 constant ARENA_STATE_OPEN = 0;
 uint256 constant ARENA_STATE_FULL = 1;
@@ -156,8 +158,6 @@ struct CreateArenaParams {
 }
 
 library ArenaMethods {
-  using ReferralHeapMethods for ReferralHeap;
-
   /// Returns the number of pixels acquired by team A.
   function getTeamACount(Arena storage arena) public view returns (uint256) {
     Range storage lastRange = arena.teamA[arena.teamA.length - 1];
@@ -553,10 +553,10 @@ contract PixelClash is
 
   /// Retrieves the state of the given arena.
   ///
-  /// @param id The arena ID.
+  /// @param arenaId The arena ID.
   /// @return An `ArenaData` containing most of the state of the arena.
-  function getArenaData(uint256 id) public view returns (ArenaData memory) {
-    Arena storage arena = getArenaFromStorage(id);
+  function getArenaData(uint256 arenaId) public view returns (ArenaData memory) {
+    Arena storage arena = getArenaFromStorage(arenaId);
     return
       ArenaData({
         creationTimestamp: arena.creationTimestamp,
@@ -578,6 +578,24 @@ contract PixelClash is
         vrfRequestId: arena.vrfRequestId,
         winner: arena.winner
       });
+  }
+
+  /// Returns the top 3 referrers (by generated revenue) for the specified arena.
+  ///
+  /// The returned elements are sorted in descending order: the first one is the top referrer, the
+  /// one that generated the most revenue.
+  ///
+  /// Note that less than 3 elements may be returned if an arena has had less than 3 referrers (not
+  /// referrals!) so far. For this function to return at least 3 elements, at least 3 different
+  /// addresses must have successfully referred other players.
+  ///
+  /// @param arenaId The arena ID.
+  /// @return referrers The top 3 referrers.
+  function getTopReferrers(
+    uint256 arenaId
+  ) public view returns (ReferralRevenue[] memory referrers) {
+    Arena storage arena = getArenaFromStorage(arenaId);
+    return arena.referrals.getTop3();
   }
 
   /// Creates a new pixel arena.

@@ -455,8 +455,8 @@ contract PixelClash is
 
   /// Creates a new pixel arena.
   ///
-  /// Payment of a fee corresponding to `ARENA_CREATION_FEE` is required. The payment is carried out
-  /// via an ERC-2612 signature.
+  /// Payment of a fee equal to `ARENA_CREATION_FEE` is required. The payment is carried out via an
+  /// ERC-2612 signature.
   ///
   /// @param params The arena creation parameters.
   /// @param deadline The deadline of the ERC-2612 signature.
@@ -506,8 +506,8 @@ contract PixelClash is
 
   /// Acquires one or more pixels in an arena.
   ///
-  /// Payment of a fee corresponding to `PIXEL_FEE` multiplied by the number of pixels. The payment
-  /// is carried out via an ERC-2612 signature.
+  /// Payment of a fee equal to `PIXEL_FEE` multiplied by the number of pixels. The payment is
+  /// carried out via an ERC-2612 signature.
   ///
   /// Note that the arena must be in state `ARENA_STATE_OPEN`, otherwise this method will revert.
   ///

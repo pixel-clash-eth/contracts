@@ -28,7 +28,8 @@ export class Deployer {
   }
 
   public async deployToken(): Promise<PixelToken> {
-    const token = await this._deploy<PixelToken>("PixelToken", await this.getAddress());
+    const ownerAddress = requireEnv("OWNER_ADDRESS");
+    const token = await this._deploy<PixelToken>("PixelToken", ownerAddress);
     console.log(`PixelToken:      ${await token.getAddress()}`);
     return token;
   }

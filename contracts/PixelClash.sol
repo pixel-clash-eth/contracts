@@ -414,10 +414,7 @@ contract PixelClash is
   error InvalidArgument();
   error InvalidState(uint256 arenaId, uint256 state);
   error NoPrize(uint256 arenaId, address player);
-  error OnlyCoordinatorCanFulfill(address have, address want);
-  error OnlyOwnerOrCoordinator(address have, address owner, address coordinator);
   error PermissionDenied();
-  error ZeroAddress();
 
   /// All payments and prizes are in this token.
   CurrencyToken public currencyToken;

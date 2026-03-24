@@ -21,6 +21,7 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
+import {ReferralHeap, ReferralHeapMethods, ReferralRevenue} from "./Heap.sol";
 import {PixelToken} from "./Token.sol";
 import {VRFClient, VRFConsumer} from "./VRFConsumer.sol";
 
@@ -103,6 +104,8 @@ struct Arena {
   /// The number of pixels acquired by each player on team B. Must be consistent with the `teamB`
   /// ranges.
   mapping(address => uint256) teamBShares;
+  /// Keeps track of all referrers for the arena and allow retrieving the top 3 efficiently.
+  ReferralHeap referrals;
   /// The total revenue accumulated by the arena, including the initial creation fee.
   uint256 revenue;
   /// The current balance of the arena, equal to `revenue` minus anything that has been withdrawn.
@@ -118,6 +121,28 @@ struct Arena {
   mapping(address => uint256) withdrawals;
 }
 
+/// Contains a subset of `Arena`'s fields. Suitable for data retrieval.
+struct ArenaData {
+  uint256 creationTimestamp;
+  address owner;
+  string teamAName;
+  string teamALogo;
+  bytes32 teamALogoCid;
+  uint32 teamAColor;
+  string teamBName;
+  string teamBLogo;
+  bytes32 teamBLogoCid;
+  uint32 teamBColor;
+  uint256 gridSize;
+  uint256 state;
+  uint256 teamACount;
+  uint256 teamBCount;
+  uint256 revenue;
+  uint256 balance;
+  uint256 vrfRequestId;
+  int256 winner;
+}
+
 struct CreateArenaParams {
   string teamAName;
   string teamALogo;
@@ -131,6 +156,8 @@ struct CreateArenaParams {
 }
 
 library ArenaMethods {
+  using ReferralHeapMethods for ReferralHeap;
+
   /// Returns the number of pixels acquired by team A.
   function getTeamACount(Arena storage arena) public view returns (uint256) {
     Range storage lastRange = arena.teamA[arena.teamA.length - 1];
@@ -336,23 +363,55 @@ library ArenaMethods {
 
   function getTopReferralPrize1(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
-    return (arena.revenue * TOP_REFERRAL_PRIZE_1) / 100;
+    if (arena.referrals.length() > 0) {
+      return (arena.revenue * TOP_REFERRAL_PRIZE_1) / 100;
+    } else {
+      return 0;
+    }
   }
 
   function getTopReferralPrize2(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
-    return (arena.revenue * TOP_REFERRAL_PRIZE_2) / 100;
+    if (arena.referrals.length() > 1) {
+      return (arena.revenue * TOP_REFERRAL_PRIZE_2) / 100;
+    } else {
+      return 0;
+    }
   }
 
   function getTopReferralPrize3(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
-    return (arena.revenue * TOP_REFERRAL_PRIZE_3) / 100;
+    if (arena.referrals.length() > 2) {
+      return (arena.revenue * TOP_REFERRAL_PRIZE_3) / 100;
+    } else {
+      return 0;
+    }
   }
 
   function getTopReferralPrize(Arena storage arena) public view returns (uint256) {
     return getTopReferralPrize1(arena) + getTopReferralPrize2(arena) + getTopReferralPrize3(arena);
   }
 
+  function getTopReferralPrizeFor(
+    Arena storage arena,
+    address player
+  ) public view returns (uint256) {
+    assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
+    ReferralRevenue[] memory referrers = arena.referrals.getTop3();
+    if (referrers.length > 0 && referrers[0].referrer == player) {
+      return (arena.revenue * TOP_REFERRAL_PRIZE_1) / 100;
+    }
+    if (referrers.length > 1 && referrers[1].referrer == player) {
+      return (arena.revenue * TOP_REFERRAL_PRIZE_2) / 100;
+    }
+    if (referrers.length > 2 && referrers[2].referrer == player) {
+      return (arena.revenue * TOP_REFERRAL_PRIZE_3) / 100;
+    }
+    return 0;
+  }
+
+  /// Returns the prize for the arena owner, which is a fixed percentage of the revenue regardless
+  /// of the winning team.
   function getArenaOwnerPrize(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
     return (arena.revenue * ARENA_OWNER_PRIZE) / 100;
@@ -375,8 +434,9 @@ library ArenaMethods {
     (address winner, ) = getPixelOwner(arena, uint256(arena.winner));
     uint256 winnerPrize = (player != winner) ? 0 : getWinnerPrize(arena);
     uint256 teamPrize = getTeamPrizeFor(arena, player);
+    uint256 topReferralPrize = getTopReferralPrizeFor(arena, player);
     uint256 ownerPrize = (player != arena.owner) ? 0 : getArenaOwnerPrize(arena);
-    return winnerPrize + teamPrize + ownerPrize;
+    return winnerPrize + teamPrize + topReferralPrize + ownerPrize;
   }
 }
 
@@ -432,7 +492,7 @@ contract PixelClash is
   PoolKey public swapPoolKey;
 
   /// List of arenas.
-  Arena[] public arenas;
+  Arena[] private arenas;
 
   /// Arena IDs indexed by VRF request ID. Used to retrieve the correct arena in the VRF callback.
   mapping(uint256 => uint256) public arenaIdsByVrfRequestId;
@@ -484,11 +544,40 @@ contract PixelClash is
     return ARENA_TIMEOUT;
   }
 
-  function getArena(uint256 id) private view returns (Arena storage arena) {
+  function getArenaFromStorage(uint256 id) private view returns (Arena storage arena) {
     if (id == 0 || id >= arenas.length) {
       revert InvalidArenaId(id);
     }
     arena = arenas[id];
+  }
+
+  /// Retrieves the state of the given arena.
+  ///
+  /// @param id The arena ID.
+  /// @return An `ArenaData` containing most of the state of the arena.
+  function getArenaData(uint256 id) public view returns (ArenaData memory) {
+    Arena storage arena = getArenaFromStorage(id);
+    return
+      ArenaData({
+        creationTimestamp: arena.creationTimestamp,
+        owner: arena.owner,
+        teamAName: arena.teamAName,
+        teamALogo: arena.teamALogo,
+        teamALogoCid: arena.teamALogoCid,
+        teamAColor: arena.teamAColor,
+        teamBName: arena.teamBName,
+        teamBLogo: arena.teamBLogo,
+        teamBLogoCid: arena.teamBLogoCid,
+        teamBColor: arena.teamBColor,
+        gridSize: arena.gridSize,
+        state: arena.getState(),
+        teamACount: arena.getTeamACount(),
+        teamBCount: arena.getTeamBCount(),
+        revenue: arena.revenue,
+        balance: arena.balance,
+        vrfRequestId: arena.vrfRequestId,
+        winner: arena.winner
+      });
   }
 
   /// Creates a new pixel arena.
@@ -573,7 +662,7 @@ contract PixelClash is
   ) public whenNotPaused nonReentrant {
     address player = msg.sender;
 
-    Arena storage arena = getArena(arenaId);
+    Arena storage arena = getArenaFromStorage(arenaId);
     {
       uint256 state = arena.getState();
       if (state != ARENA_STATE_OPEN) {
@@ -615,7 +704,7 @@ contract PixelClash is
   ///
   /// @param arenaId The ID of the arena.
   function draw(uint256 arenaId) public payable whenNotPaused nonReentrant {
-    Arena storage arena = getArena(arenaId);
+    Arena storage arena = getArenaFromStorage(arenaId);
     {
       uint256 state = arena.getState();
       if (state <= ARENA_STATE_OPEN || state >= ARENA_STATE_DRAWING) {
@@ -649,7 +738,7 @@ contract PixelClash is
     }
 
     uint256 arenaId = arenaIdsByVrfRequestId[requestId];
-    Arena storage arena = getArena(arenaId);
+    Arena storage arena = getArenaFromStorage(arenaId);
     {
       uint256 state = arena.getState();
       if (state != ARENA_STATE_DRAWING) {
@@ -703,7 +792,7 @@ contract PixelClash is
   ///
   /// Reverts if the arena hasn't received its draw yet.
   function getPrizeFor(uint256 arenaId, address player) public view returns (uint256) {
-    Arena storage arena = getArena(arenaId);
+    Arena storage arena = getArenaFromStorage(arenaId);
     uint256 state = arena.getState();
     if (state < ARENA_STATE_DRAWN) {
       revert InvalidState(arenaId, state);
@@ -718,7 +807,7 @@ contract PixelClash is
   /// arena) the transaction is reverted.
   function withdrawPrize(uint256 arenaId) public whenNotPaused nonReentrant {
     address player = msg.sender;
-    Arena storage arena = getArena(arenaId);
+    Arena storage arena = getArenaFromStorage(arenaId);
     {
       uint256 state = arena.getState();
       if (state < ARENA_STATE_DRAWN) {

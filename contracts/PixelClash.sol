@@ -13,7 +13,6 @@ import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
-import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
@@ -578,8 +577,11 @@ contract PixelClash is
     address player = msg.sender;
 
     Arena storage arena = getArena(arenaId);
-    if (arena.getState() != ARENA_STATE_OPEN) {
-      revert InvalidState(arenaId, arena.getState());
+    {
+      uint256 state = arena.getState();
+      if (state != ARENA_STATE_OPEN) {
+        revert InvalidState(arenaId, state);
+      }
     }
 
     if (count == 0) {
@@ -635,7 +637,9 @@ contract PixelClash is
 
     emit VRFRequest(arenaId, arena.vrfRequestId);
 
-    payable(msg.sender).sendValue(refund);
+    if (refund > 0) {
+      payable(msg.sender).sendValue(refund);
+    }
   }
 
   /// VRF callback.
@@ -649,8 +653,11 @@ contract PixelClash is
 
     uint256 arenaId = arenaIdsByVrfRequestId[requestId];
     Arena storage arena = getArena(arenaId);
-    if (arena.getState() != ARENA_STATE_DRAWING) {
-      revert InvalidState(arenaId, arena.getState());
+    {
+      uint256 state = arena.getState();
+      if (state != ARENA_STATE_DRAWING) {
+        revert InvalidState(arenaId, state);
+      }
     }
     assert(arena.vrfRequestId == requestId);
 

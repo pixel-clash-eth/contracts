@@ -227,12 +227,14 @@ library ArenaMethods {
   /// @param count The number of pixels to acquire.
   /// @param teamB Whether tha player is playing in team A or B. If true, the pixels will be
   ///   acquired by team B, otherwise they'll be acquire by team A.
+  /// @param referrer The referrer's address, or the zero address if this purchase wasn't referred.
   function acquirePixels(
     Arena storage arena,
     address player,
     uint256 pixelFee,
     uint256 count,
-    bool teamB
+    bool teamB,
+    address referrer
   ) internal {
     uint256 teamACount = getTeamACount(arena);
     uint256 teamBCount = getTeamBCount(arena);
@@ -247,6 +249,9 @@ library ArenaMethods {
     uint256 fee = pixelFee * count;
     arena.revenue += fee;
     arena.balance += fee;
+    if (referrer != address(0)) {
+      arena.referrals.addReferral(referrer, fee);
+    }
   }
 
   /// Returns the owner of a given pixel.
@@ -665,6 +670,7 @@ contract PixelClash is
   /// @param arenaId The arena ID.
   /// @param teamB If true the pixels will be acquired by team B, otherwise by team A.
   /// @param count The number of pixels to acquire. Must be > 0.
+  /// @param referrer The referrer's address, or the zero address if this purchase wasn't referred.
   /// @param deadline The deadline of the ERC-2612 signature.
   /// @param v The `v` parameter of the ERC-2612 signature.
   /// @param r The `r` parameter of the ERC-2612 signature.
@@ -673,6 +679,7 @@ contract PixelClash is
     uint256 arenaId,
     bool teamB,
     uint256 count,
+    address referrer,
     uint256 deadline,
     uint8 v,
     bytes32 r,
@@ -697,11 +704,12 @@ contract PixelClash is
       count = availablePixels;
     }
 
+    arena.acquirePixels(player, pixelFee(), count, teamB, referrer);
+
     uint256 fee = pixelFee() * count;
     try currencyToken.permit(player, address(this), fee, deadline, v, r, s) {} catch {}
     currencyToken.safeTransferFrom(player, address(this), fee);
 
-    arena.acquirePixels(player, pixelFee(), count, teamB);
     emit PurchasePixels(player, arenaId, teamB, count);
   }
 

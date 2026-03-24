@@ -9,7 +9,9 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -318,12 +320,9 @@ library ArenaMethods {
   }
 
   /// Returns the team prize for a given player based on how many pixels they acquired in that team.
-  function getTeamPrizeFor(
-    Arena storage arena,
-    address player,
-    bool teamB
-  ) public view returns (uint256) {
-    assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
+  function getTeamPrizeFor(Arena storage arena, address player) public view returns (uint256) {
+    assert(getState(arena) >= ARENA_STATE_DRAWN);
+    bool teamB = teamBWins(arena);
     uint256 teamPixels = teamB ? getTeamBCount(arena) : getTeamACount(arena);
     uint256 playerPixels = teamB ? arena.teamBShares[player] : arena.teamAShares[player];
     return (arena.revenue * TEAM_PRIZE * playerPixels) / (100 * teamPixels);
@@ -374,9 +373,9 @@ library ArenaMethods {
   /// Returns the total prizes won by a player in this arena.
   function getTotalPrizeFor(Arena storage arena, address player) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
-    (address winner, bool teamB) = getPixelOwner(arena, uint256(arena.winner));
+    (address winner, ) = getPixelOwner(arena, uint256(arena.winner));
     uint256 winnerPrize = (player != winner) ? 0 : getWinnerPrize(arena);
-    uint256 teamPrize = (teamB != teamBWins(arena)) ? 0 : getTeamPrizeFor(arena, player, teamB);
+    uint256 teamPrize = getTeamPrizeFor(arena, player);
     uint256 ownerPrize = (player != arena.owner) ? 0 : getArenaOwnerPrize(arena);
     return winnerPrize + teamPrize + ownerPrize;
   }
@@ -391,6 +390,7 @@ contract PixelClash is
   VRFClient,
   IUnlockCallback
 {
+  using Address for address payable;
   using SafeERC20 for CurrencyToken;
   using ArenaMethods for Arena;
 
@@ -410,6 +410,7 @@ contract PixelClash is
 
   error AlreadyWithdrawn(uint256 arenaId, address player);
   error GridTooSmall(uint256 gridSize);
+  error IncorrectPaymentAmount(uint256 got, uint256 want);
   error InvalidArenaId(uint256 id);
   error InvalidArgument();
   error InvalidState(uint256 arenaId, uint256 state);
@@ -460,6 +461,9 @@ contract PixelClash is
     vrfConsumer = new VRFConsumer(vrfCoordinator);
     poolManager = poolManager_;
     swapPoolKey = swapPoolKey_;
+
+    // Skip arena #0 because ID 0 is considered invalid.
+    arenas.push();
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
@@ -512,10 +516,6 @@ contract PixelClash is
     uint256 fee = arenaCreationFee();
     try currencyToken.permit(owner, address(this), fee, deadline, v, r, s) {} catch {}
     currencyToken.safeTransferFrom(owner, address(this), fee);
-
-    // Skip arena #0 because ID 0 is considered invalid.
-    arenas.push();
-
     uint256 id = arenas.length;
     arenas.push();
     Arena storage arena = arenas[id];
@@ -606,7 +606,10 @@ contract PixelClash is
 
   /// Triggers the final drawing for an arena.
   ///
-  /// This function call must be funded with the ETH value specified by `getDrawPrice`.
+  /// This function call must be funded with at least the ETH value specified by `getDrawPrice`.
+  /// However, to account for slippage, it is best to fund it with a slightly higher amount, eg.
+  /// 110% of what's returned by `getDrawPrice()`. The function will automatically refund any
+  /// excess.
   //
   /// The transaction will fail if the arena is not in the `ARENA_STATE_FULL` or
   /// `ARENA_STATE_TIMED_OUT` state.
@@ -620,8 +623,18 @@ contract PixelClash is
         revert InvalidState(arenaId, state);
       }
     }
-    arena.vrfRequestId = vrfConsumer.requestRandomness{value: msg.value}(VRF_CALLBACK_GAS_LIMIT);
+
+    uint256 price = getDrawPrice();
+    if (msg.value < price) {
+      revert IncorrectPaymentAmount(msg.value, price);
+    }
+    uint256 refund = price - msg.value;
+
+    arena.vrfRequestId = vrfConsumer.requestRandomness{value: price}(VRF_CALLBACK_GAS_LIMIT);
     arenaIdsByVrfRequestId[arena.vrfRequestId] = arenaId;
+
+    payable(msg.sender).sendValue(refund);
+
     emit VRFRequest(arenaId, arena.vrfRequestId);
   }
 
@@ -675,7 +688,7 @@ contract PixelClash is
 
     // Take the output tokens from the pool manager.
     uint256 pixelAmount =
-      zeroForOne ? uint256(uint128(delta.amount1())) : uint256(uint128(delta.amount0()));
+      zeroForOne ? SafeCast.toUint256(delta.amount1()) : SafeCast.toUint256(delta.amount0());
     Currency currencyOut = zeroForOne ? swapPoolKey.currency1 : swapPoolKey.currency0;
     poolManager.take(currencyOut, address(this), pixelAmount);
 

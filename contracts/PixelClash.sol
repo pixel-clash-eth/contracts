@@ -375,6 +375,8 @@ contract PixelClash is
   event VRFRequest(uint256 indexed arenaId, uint256 vrfRequestId);
   event ArenaClosure(uint256 indexed arenaId, uint256 vrfRequestId, uint256 winner);
 
+  event WithdrawPrize(uint256 indexed arenaId, address indexed player, uint256 prize);
+
   error AlreadyWithdrawn(uint256 arenaId, address player);
   error GridTooSmall(uint256 gridSize);
   error InvalidArenaId(uint256 id);
@@ -694,5 +696,6 @@ contract PixelClash is
     arena.balance -= amount;
     arena.withdrawals[player] += amount;
     currencyToken.safeTransfer(player, amount);
+    emit WithdrawPrize(arenaId, player, prize);
   }
 }

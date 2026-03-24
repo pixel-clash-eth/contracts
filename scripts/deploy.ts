@@ -1,120 +1,140 @@
+import type { AbstractSigner, BaseContract } from "ethers";
 import { ethers, upgrades } from "hardhat";
 
-// Uniswap V4 requires currency0 < currency1. Note that lexicographic order of normalized Ethereum
-// addresses is the same as numeric order.
-function orderCurrencies(a: string, b: string): [string, string] {
-  return a.toLowerCase() < b.toLowerCase() ? [a, b] : [b, a];
+import type { PixelClash, PixelController, PixelGovernor, PixelToken } from "../typechain-types";
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} is not set in .env`);
+  }
+  return value;
+}
+
+class Deployer {
+  public constructor(private readonly _account: AbstractSigner) {}
+
+  public async getAddress(): Promise<string> {
+    return await this._account.getAddress();
+  }
+
+  private async _deploy<Contract extends BaseContract>(
+    contractName: string,
+    ...args: any[]
+  ): Promise<Contract> {
+    const factory = await ethers.getContractFactory(contractName);
+    const contract = await factory.deploy(...args);
+    await contract.waitForDeployment();
+    return contract as Contract;
+  }
+
+  public async deployToken(): Promise<PixelToken> {
+    const token = await this._deploy<PixelToken>("PixelToken", await this.getAddress());
+    console.log(`PixelToken:      ${await token.getAddress()}`);
+    return token;
+  }
+
+  public async deployPixelClash(pixelToken: PixelToken): Promise<PixelClash> {
+    const currencyTokenAddress = requireEnv("CURRENCY_TOKEN");
+    const vrfWrapperAddress = requireEnv("CHAIN_LINK_VRF_WRAPPER");
+    const poolManagerAddress = requireEnv("UNISWAP_V4_POOL_MANAGER");
+    const poolFee = parseInt(requireEnv("PIXEL_POOL_FEE"), 10);
+    const poolTickSpacing = parseInt(requireEnv("PIXEL_POOL_TICK_SPACING"), 10);
+    const pixelTokenAddress = await pixelToken.getAddress();
+
+    const swapPoolKey = {
+      currency0:
+        currencyTokenAddress.toLowerCase() < pixelTokenAddress.toLowerCase()
+          ? currencyTokenAddress
+          : pixelTokenAddress,
+      currency1:
+        currencyTokenAddress.toLowerCase() > pixelTokenAddress.toLowerCase()
+          ? currencyTokenAddress
+          : pixelTokenAddress,
+      fee: poolFee,
+      tickSpacing: poolTickSpacing,
+      hooks: ethers.ZeroAddress,
+    };
+
+    const PixelClashFactory = await ethers.getContractFactory("PixelClash");
+    const pixelClash = await upgrades.deployProxy(
+      PixelClashFactory,
+      [
+        await this.getAddress(),
+        currencyTokenAddress,
+        pixelTokenAddress,
+        vrfWrapperAddress,
+        poolManagerAddress,
+        swapPoolKey,
+      ],
+      { kind: "uups" },
+    );
+    await pixelClash.waitForDeployment();
+
+    console.log(`PixelClash:      ${await pixelClash.getAddress()}`);
+    return pixelClash;
+  }
+
+  public async deployGovernance(
+    pixelToken: PixelToken,
+    pixelClash: PixelClash,
+  ): Promise<[PixelController, PixelGovernor]> {
+    const ownerAddress = requireEnv("OWNER_ADDRESS");
+
+    const controller = await this._deploy<PixelController>(
+      "PixelController",
+      await pixelClash.getAddress(),
+      /*proposers=*/ [],
+      /*executors=*/ [],
+      /*admin=*/ await this.getAddress(),
+    );
+    const controllerAddress = await controller.getAddress();
+    console.log(`PixelController: ${controllerAddress}`);
+
+    await (await pixelClash.transferOwnership(controllerAddress)).wait();
+    console.log("PixelClash ownership → PixelController");
+
+    const governor = await this._deploy<PixelGovernor>(
+      "PixelGovernor",
+      await pixelToken.getAddress(),
+      controllerAddress,
+    );
+    const governorAddress = await governor.getAddress();
+    console.log(`PixelGovernor:   ${governorAddress}`);
+
+    const PROPOSER_ROLE = await controller.PROPOSER_ROLE();
+    const EXECUTOR_ROLE = await controller.EXECUTOR_ROLE();
+    const CANCELLER_ROLE = await controller.CANCELLER_ROLE();
+    const ADMIN_ROLE = await controller.DEFAULT_ADMIN_ROLE();
+
+    await (await controller.grantRole(PROPOSER_ROLE, governorAddress)).wait();
+    await (await controller.grantRole(EXECUTOR_ROLE, governorAddress)).wait();
+    await (await controller.grantRole(CANCELLER_ROLE, governorAddress)).wait();
+    await (await controller.grantRole(ADMIN_ROLE, ownerAddress)).wait();
+
+    await (await controller.renounceRole(ADMIN_ROLE, await this.getAddress())).wait();
+    console.log("Deployer admin role renounced");
+
+    return [controller, governor];
+  }
 }
 
 async function main() {
-  // ─── Env validation ──────────────────────────────────────────────────────────
-  function requireEnv(name: string): string {
-    const value = process.env[name];
-    if (!value) {
-      throw new Error(`${name} is not set in .env`);
-    }
-    return value;
-  }
-
   const ownerAddress = requireEnv("OWNER_ADDRESS");
-  const currencyTokenAddress = requireEnv("CURRENCY_TOKEN");
-  const vrfWrapperAddress = requireEnv("CHAIN_LINK_VRF_WRAPPER");
-  const poolManagerAddress = requireEnv("UNISWAP_V4_POOL_MANAGER");
-  const poolFee = requireEnv("POOL_FEE");
-  const poolTickSpacing = requireEnv("POOL_TICK_SPACING");
-  const poolHooks = process.env.POOL_HOOKS ?? ethers.ZeroAddress;
 
-  const deployer = process.env.DEPLOYER_PRIVATE_KEY
-    ? new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY, ethers.provider)
-    : (await ethers.getSigners())[0];
-  console.log(`Deployer: ${deployer.address}`);
+  const deployer = new Deployer((await ethers.getSigners())[0]);
+  console.log(`Deployer: ${await deployer.getAddress()}`);
   console.log(`Owner:    ${ownerAddress}`);
 
-  // ─── 1. PixelToken ───────────────────────────────────────────────────────────
-  const PixelTokenFactory = await ethers.getContractFactory("PixelToken");
-  const pixelToken = await PixelTokenFactory.deploy(deployer.address);
-  await pixelToken.waitForDeployment();
-  const pixelTokenAddress = await pixelToken.getAddress();
-  console.log(`PixelToken:      ${pixelTokenAddress}`);
+  const pixelToken = await deployer.deployToken();
+  const pixelClash = await deployer.deployPixelClash(pixelToken);
+  const [controller, governor] = await deployer.deployGovernance(pixelToken, pixelClash);
 
-  // ─── 2. PixelClash (UUPS proxy) ──────────────────────────────────────────────
-  const [currency0, currency1] = orderCurrencies(currencyTokenAddress, pixelTokenAddress);
-  const swapPoolKey = {
-    currency0,
-    currency1,
-    fee: Number(poolFee),
-    tickSpacing: Number(poolTickSpacing),
-    hooks: poolHooks,
-  };
-
-  const PixelClashFactory = await ethers.getContractFactory("PixelClash");
-  const pixelClash = await upgrades.deployProxy(
-    PixelClashFactory,
-    [
-      deployer.address, // initialOwner — transferred to PixelController below
-      currencyTokenAddress,
-      pixelTokenAddress,
-      vrfWrapperAddress,
-      poolManagerAddress,
-      swapPoolKey,
-    ],
-    { kind: "uups" },
-  );
-  await pixelClash.waitForDeployment();
-  const pixelClashAddress = await pixelClash.getAddress();
-  console.log(`PixelClash:      ${pixelClashAddress}`);
-
-  // ─── 3. PixelController (Timelock) ───────────────────────────────────────────
-  // Deployed with deployer as the sole admin so we can grant roles in the next
-  // steps before renouncing.
-  const PixelControllerFactory = await ethers.getContractFactory("PixelController");
-  const controller = await PixelControllerFactory.deploy(
-    pixelClashAddress,
-    [], // proposers — granted below
-    [], // executors — granted below
-    deployer.address, // temporary admin
-  );
-  await controller.waitForDeployment();
-  const controllerAddress = await controller.getAddress();
-  console.log(`PixelController: ${controllerAddress}`);
-
-  // ─── 4. Transfer PixelClash ownership to PixelController ─────────────────────
-  await (await pixelClash.transferOwnership(controllerAddress)).wait();
-  console.log("PixelClash ownership → PixelController");
-
-  // ─── 5. PixelGovernor ────────────────────────────────────────────────────────
-  const PixelGovernorFactory = await ethers.getContractFactory("PixelGovernor");
-  const governor = await PixelGovernorFactory.deploy(pixelTokenAddress, controllerAddress);
-  await governor.waitForDeployment();
-  const governorAddress = await governor.getAddress();
-  console.log(`PixelGovernor:   ${governorAddress}`);
-
-  // ─── 6. Role setup ───────────────────────────────────────────────────────────
-  const PROPOSER_ROLE = await controller.PROPOSER_ROLE();
-  const EXECUTOR_ROLE = await controller.EXECUTOR_ROLE();
-  const CANCELLER_ROLE = await controller.CANCELLER_ROLE();
-  const ADMIN_ROLE = await controller.DEFAULT_ADMIN_ROLE();
-
-  // Governor needs PROPOSER_ROLE + CANCELLER_ROLE to queue and cancel proposals
-  // through the timelock.
-  await (await controller.grantRole(PROPOSER_ROLE, governorAddress)).wait();
-  await (await controller.grantRole(CANCELLER_ROLE, governorAddress)).wait();
-
-  // Owner receives proposer, executor, and admin roles as requested.
-  await (await controller.grantRole(PROPOSER_ROLE, ownerAddress)).wait();
-  await (await controller.grantRole(EXECUTOR_ROLE, ownerAddress)).wait();
-  await (await controller.grantRole(ADMIN_ROLE, ownerAddress)).wait();
-
-  // Deployer renounces its temporary admin role — it never held proposer/executor.
-  await (await controller.renounceRole(ADMIN_ROLE, deployer.address)).wait();
-  console.log("Deployer admin role renounced");
-
-  // ─── Summary ─────────────────────────────────────────────────────────────────
   console.log("\nDeployment complete:");
-  console.log(`  PixelToken:      ${pixelTokenAddress}`);
-  console.log(`  PixelClash:      ${pixelClashAddress}`);
-  console.log(`  PixelController: ${controllerAddress}`);
-  console.log(`  PixelGovernor:   ${governorAddress}`);
+  console.log(`  PixelToken:      ${await pixelToken.getAddress()}`);
+  console.log(`  PixelClash:      ${await pixelClash.getAddress()}`);
+  console.log(`  PixelController: ${await controller.getAddress()}`);
+  console.log(`  PixelGovernor:   ${await governor.getAddress()}`);
 }
 
 main().catch((e) => {

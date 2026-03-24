@@ -2,20 +2,11 @@ import type { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox";
 import "@openzeppelin/hardhat-upgrades";
 import * as dotenv from "dotenv";
+import "hardhat-gas-reporter";
 
 dotenv.config();
 
-const PRIVATE_KEY = process.env.PRIVATE_KEY ?? "0x" + "0".repeat(64);
-const RPC_URL = process.env.RPC_URL ?? "http://localhost:8545";
-
 const config: HardhatUserConfig = {
-  networks: {
-    // Used by the deployment script: npx hardhat run scripts/deploy.ts --network live
-    live: {
-      url: RPC_URL,
-      accounts: [PRIVATE_KEY],
-    },
-  },
   solidity: {
     version: "0.8.28",
     settings: {
@@ -29,6 +20,21 @@ const config: HardhatUserConfig = {
       evmVersion: "cancun",
       viaIR: true,
     },
+  },
+  networks: {
+    mainnet: {
+      chainId: 1,
+      url: process.env.RPC_ADDRESS!,
+      accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
+    },
+    test: {
+      chainId: 31337,
+      url: "https://localhost:8545",
+    },
+  },
+  gasReporter: {
+    currency: "USD",
+    L1: "ethereum",
   },
 };
 

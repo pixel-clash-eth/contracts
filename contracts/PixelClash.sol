@@ -147,11 +147,11 @@ library ArenaMethods {
     uint256 teamACount = getTeamACount(arena);
     uint256 teamBCount = getTeamBCount(arena);
     assert(teamACount + teamBCount <= arena.gridSize);
-    return arena.gridSize - getTeamACount(arena) - getTeamBCount(arena);
+    return arena.gridSize - teamACount - teamBCount;
   }
 
   function isFull(Arena storage arena) private view returns (bool) {
-    return getAvailablePixels(arena) > 0;
+    return getAvailablePixels(arena) == 0;
   }
 
   function isTimedOut(Arena storage arena) private view returns (bool) {
@@ -272,6 +272,25 @@ library ArenaMethods {
     assert(false);
   }
 
+  function draw(
+    Arena storage arena,
+    uint256 random
+  ) internal returns (uint256 winner, uint256 revenue) {
+    assert(getState(arena) == ARENA_STATE_DRAWING);
+    uint256 teamACount = getTeamACount(arena);
+    uint256 teamBCount = getTeamBCount(arena);
+    uint256 acquiredPixels = teamACount + teamBCount;
+    uint256 gapSize = arena.gridSize - acquiredPixels;
+    winner = random % acquiredPixels;
+    if (winner >= teamACount) {
+      winner += gapSize;
+    }
+    arena.winner = int256(winner);
+    arena.vrfRequestId = 0;
+    revenue = arena.revenue - getTotalPrizes(arena);
+    arena.balance -= revenue;
+  }
+
   /// Indicates whether team A won.
   function teamAWins(Arena storage arena) public view returns (bool) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
@@ -296,6 +315,18 @@ library ArenaMethods {
   function getTeamPrize(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
     return (arena.revenue * TEAM_PRIZE) / 100;
+  }
+
+  /// Returns the team prize for a given player based on how many pixels they acquired in that team.
+  function getTeamPrizeFor(
+    Arena storage arena,
+    address player,
+    bool teamB
+  ) public view returns (uint256) {
+    assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
+    uint256 teamPixels = teamB ? getTeamBCount(arena) : getTeamACount(arena);
+    uint256 playerPixels = teamB ? arena.teamBShares[player] : arena.teamAShares[player];
+    return (arena.revenue * TEAM_PRIZE * playerPixels) / (100 * teamPixels);
   }
 
   /// Returns the prize for the referrer of the winner, or zero if the winner had no referrer.
@@ -345,7 +376,7 @@ library ArenaMethods {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
     (address winner, bool teamB) = getPixelOwner(arena, uint256(arena.winner));
     uint256 winnerPrize = (player != winner) ? 0 : getWinnerPrize(arena);
-    uint256 teamPrize = (teamB != teamBWins(arena)) ? 0 : getTeamPrize(arena);
+    uint256 teamPrize = (teamB != teamBWins(arena)) ? 0 : getTeamPrizeFor(arena, player, teamB);
     uint256 ownerPrize = (player != arena.owner) ? 0 : getArenaOwnerPrize(arena);
     return winnerPrize + teamPrize + ownerPrize;
   }
@@ -453,6 +484,13 @@ contract PixelClash is
     return ARENA_TIMEOUT;
   }
 
+  function getArena(uint256 id) private view returns (Arena storage arena) {
+    if (id == 0 || id >= arenas.length) {
+      revert InvalidArenaId(id);
+    }
+    arena = arenas[id];
+  }
+
   /// Creates a new pixel arena.
   ///
   /// Payment of a fee equal to `ARENA_CREATION_FEE` is required. The payment is carried out via an
@@ -474,6 +512,10 @@ contract PixelClash is
     uint256 fee = arenaCreationFee();
     try currencyToken.permit(owner, address(this), fee, deadline, v, r, s) {} catch {}
     currencyToken.safeTransferFrom(owner, address(this), fee);
+
+    // Skip arena #0 because ID 0 is considered invalid.
+    arenas.push();
+
     uint256 id = arenas.length;
     arenas.push();
     Arena storage arena = arenas[id];
@@ -535,10 +577,7 @@ contract PixelClash is
   ) public whenNotPaused nonReentrant {
     address player = msg.sender;
 
-    if (arenaId >= arenas.length) {
-      revert InvalidArenaId(arenaId);
-    }
-    Arena storage arena = arenas[arenaId];
+    Arena storage arena = getArena(arenaId);
     if (arena.getState() != ARENA_STATE_OPEN) {
       revert InvalidState(arenaId, arena.getState());
     }
@@ -574,10 +613,7 @@ contract PixelClash is
   ///
   /// @param arenaId The ID of the arena.
   function draw(uint256 arenaId) public payable whenNotPaused nonReentrant {
-    if (arenaId >= arenas.length) {
-      revert InvalidArenaId(arenaId);
-    }
-    Arena storage arena = arenas[arenaId];
+    Arena storage arena = getArena(arenaId);
     {
       uint256 state = arena.getState();
       if (state <= ARENA_STATE_OPEN || state >= ARENA_STATE_DRAWING) {
@@ -593,24 +629,19 @@ contract PixelClash is
   ///
   /// @param requestId The VRF request ID.
   /// @param random The random word returned by the ChainLink VRF.
-  function fulfillRandomness(uint256 requestId, uint256 random) external {
+  function fulfillRandomness(uint256 requestId, uint256 random) external nonReentrant {
     if (msg.sender != address(vrfConsumer)) {
       revert PermissionDenied();
     }
 
     uint256 arenaId = arenaIdsByVrfRequestId[requestId];
-    Arena storage arena = arenas[arenaId];
+    Arena storage arena = getArena(arenaId);
     if (arena.getState() != ARENA_STATE_DRAWING) {
       revert InvalidState(arenaId, arena.getState());
     }
     assert(arena.vrfRequestId == requestId);
 
-    uint256 winner = random % arena.gridSize;
-    arena.winner = int256(winner);
-    arena.vrfRequestId = 0;
-
-    uint256 revenue = arena.revenue - arena.getTotalPrizes();
-    arena.balance -= revenue;
+    (uint256 winner, uint256 revenue) = arena.draw(random);
     uint256 pixelAmount = abi.decode(poolManager.unlock(abi.encode(revenue)), (uint256));
     pixelToken.burn(pixelAmount);
 
@@ -655,15 +686,10 @@ contract PixelClash is
   ///
   /// Reverts if the arena hasn't received its draw yet.
   function getPrizeFor(uint256 arenaId, address player) public view returns (uint256) {
-    if (arenaId >= arenas.length) {
-      revert InvalidArenaId(arenaId);
-    }
-    Arena storage arena = arenas[arenaId];
-    {
-      uint256 state = arena.getState();
-      if (state < ARENA_STATE_DRAWN) {
-        revert InvalidState(arenaId, state);
-      }
+    Arena storage arena = getArena(arenaId);
+    uint256 state = arena.getState();
+    if (state < ARENA_STATE_DRAWN) {
+      revert InvalidState(arenaId, state);
     }
     return arena.getTotalPrizeFor(player);
   }
@@ -675,10 +701,7 @@ contract PixelClash is
   /// arena) the transaction is reverted.
   function withdrawPrize(uint256 arenaId) public whenNotPaused nonReentrant {
     address player = msg.sender;
-    if (arenaId >= arenas.length) {
-      revert InvalidArenaId(arenaId);
-    }
-    Arena storage arena = arenas[arenaId];
+    Arena storage arena = getArena(arenaId);
     {
       uint256 state = arena.getState();
       if (state < ARENA_STATE_DRAWN) {
@@ -696,6 +719,6 @@ contract PixelClash is
     arena.balance -= amount;
     arena.withdrawals[player] += amount;
     currencyToken.safeTransfer(player, amount);
-    emit WithdrawPrize(arenaId, player, prize);
+    emit WithdrawPrize(arenaId, player, amount);
   }
 }

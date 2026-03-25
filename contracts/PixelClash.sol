@@ -27,6 +27,9 @@ import {VRFClient, VRFConsumer} from "./VRFConsumer.sol";
 
 using ReferralHeapMethods for ReferralHeap;
 
+// Maximum arena grid size.
+uint256 constant MAX_GRID_SIZE = 1e12;
+
 // Arena states.
 uint256 constant ARENA_STATE_OPEN = 0;
 uint256 constant ARENA_STATE_FULL = 1;
@@ -62,9 +65,15 @@ interface CurrencyToken is IERC20, IERC20Metadata, IERC20Permit {}
 ///
 /// `offset+length` must be less than or equal to the grid size of the arena.
 struct Range {
+  /// The owner of the range.
   address owner;
+  /// Zero-based offset of the range. For team A this is the offset from the beginning of the grid,
+  /// while for team B it's the offset from the end.
   uint256 offset;
+  /// Length of the range.
   uint256 length;
+  /// The referrer address, or the zero address if the range was purchased without a referrer.
+  address referrer;
 }
 
 struct Arena {
@@ -219,7 +228,10 @@ library ArenaMethods {
 
   /// Acquires the given number of pixels.
   ///
-  /// NOTE: `count` pixels MUST be available in the arena, otherwise this function will assert.
+  /// This function will attempt to acquire `count` pixels, but if less are available in the gap
+  /// range it will only acquire the available ones and return the number of acquired pixels. The
+  /// revenue and balance of the arena will be updated according to the number of effectively
+  /// acquired pixels.
   ///
   /// @param arena The `Arena` instance.
   /// @param player Address of the player acquiring the pixels.
@@ -228,6 +240,8 @@ library ArenaMethods {
   /// @param teamB Whether tha player is playing in team A or B. If true, the pixels will be
   ///   acquired by team B, otherwise they'll be acquire by team A.
   /// @param referrer The referrer's address, or the zero address if this purchase wasn't referred.
+  /// @return acquired The number of acquired pixels, which may be less than `count` if less were
+  ///   available.
   function acquirePixels(
     Arena storage arena,
     address player,
@@ -235,18 +249,25 @@ library ArenaMethods {
     uint256 count,
     bool teamB,
     address referrer
-  ) internal {
+  ) internal returns (uint256 acquired) {
+    assert(player != referrer);
     uint256 teamACount = getTeamACount(arena);
     uint256 teamBCount = getTeamBCount(arena);
-    assert(teamACount + teamBCount + count <= arena.gridSize);
+    assert(teamACount + teamBCount < arena.gridSize);
+    uint256 availablePixels = arena.gridSize - teamACount - teamBCount;
+    acquired = availablePixels < count ? availablePixels : count;
     if (teamB) {
-      arena.teamB.push(Range({owner: player, offset: teamBCount, length: count}));
-      arena.teamBShares[player] += count;
+      arena.teamB.push(
+        Range({owner: player, offset: teamBCount, length: acquired, referrer: referrer})
+      );
+      arena.teamBShares[player] += acquired;
     } else {
-      arena.teamA.push(Range({owner: player, offset: teamACount, length: count}));
-      arena.teamAShares[player] += count;
+      arena.teamA.push(
+        Range({owner: player, offset: teamACount, length: acquired, referrer: referrer})
+      );
+      arena.teamAShares[player] += acquired;
     }
-    uint256 fee = pixelFee * count;
+    uint256 fee = pixelFee * acquired;
     arena.revenue += fee;
     arena.balance += fee;
     if (referrer != address(0)) {
@@ -262,10 +283,12 @@ library ArenaMethods {
   /// @return owner The owner of the pixel, or the zero address if the pixel is in the gap.
   /// @return teamB Whether the pixel has been acquired by team A or B. Ignore this value if the
   ///   pixel is in the gap.
+  /// @return referrer The referrer through which the pixel was purchased, or zero if the pixel
+  ///   wasn't purchased through a referral.
   function getPixelOwner(
     Arena storage arena,
     uint256 index
-  ) public view returns (address owner, bool teamB) {
+  ) public view returns (address owner, bool teamB, address referrer) {
     uint256 teamACount = getTeamACount(arena);
     uint256 teamBCount = getTeamBCount(arena);
     assert(index < arena.gridSize);
@@ -281,7 +304,7 @@ library ArenaMethods {
         } else if (index >= range.offset + range.length) {
           i = k + 1;
         } else {
-          return (range.owner, false);
+          return (range.owner, false, range.referrer);
         }
       }
     } else if (index2 < teamBCount) {
@@ -295,16 +318,22 @@ library ArenaMethods {
         } else if (index2 >= range.offset + range.length) {
           i = k + 1;
         } else {
-          return (range.owner, true);
+          return (range.owner, true, range.referrer);
         }
       }
     } else {
       // index is in the gap
-      return (address(0), false);
+      return (address(0), false, address(0));
     }
     assert(false);
   }
 
+  /// Picks the arena winner and transitions into the "drawn" state.
+  ///
+  /// @param arena The `Arena` instance.
+  /// @param random The random word returned by the ChainLink VRF.
+  /// @return winner The zero-based index of the winner (same as `arena.winner`).
+  /// @return revenue The protocol revenue from the arena after deducting all prizes.
   function draw(
     Arena storage arena,
     uint256 random
@@ -324,14 +353,14 @@ library ArenaMethods {
     arena.balance -= revenue;
   }
 
-  /// Indicates whether team A won.
+  /// Whether team A won.
   function teamAWins(Arena storage arena) public view returns (bool) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
     uint256 teamACount = getTeamACount(arena);
     return uint256(arena.winner) < teamACount;
   }
 
-  /// Indicates whether team B won.
+  /// Whether team B won.
   function teamBWins(Arena storage arena) public view returns (bool) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
     uint256 teamBCount = getTeamBCount(arena);
@@ -362,8 +391,12 @@ library ArenaMethods {
   /// Returns the prize for the referrer of the winner, or zero if the winner had no referrer.
   function getSponsorPrize(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
-    // TODO: implement referrals.
-    return 0;
+    (, , address referrer) = getPixelOwner(arena, uint256(arena.winner));
+    if (referrer != address(0)) {
+      return (arena.revenue * SPONSOR_PRIZE) / 100;
+    } else {
+      return 0;
+    }
   }
 
   function getTopReferralPrize1(Arena storage arena) public view returns (uint256) {
@@ -436,12 +469,13 @@ library ArenaMethods {
   /// Returns the total prizes won by a player in this arena.
   function getTotalPrizeFor(Arena storage arena, address player) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
-    (address winner, ) = getPixelOwner(arena, uint256(arena.winner));
+    (address winner, , address referrer) = getPixelOwner(arena, uint256(arena.winner));
     uint256 winnerPrize = (player != winner) ? 0 : getWinnerPrize(arena);
     uint256 teamPrize = getTeamPrizeFor(arena, player);
+    uint256 sponsorPrize = (player != referrer) ? 0 : getSponsorPrize(arena);
     uint256 topReferralPrize = getTopReferralPrizeFor(arena, player);
     uint256 ownerPrize = (player != arena.owner) ? 0 : getArenaOwnerPrize(arena);
-    return winnerPrize + teamPrize + topReferralPrize + ownerPrize;
+    return winnerPrize + teamPrize + sponsorPrize + topReferralPrize + ownerPrize;
   }
 }
 
@@ -464,7 +498,8 @@ contract PixelClash is
     address indexed player,
     uint256 indexed arenaId,
     bool indexed teamB,
-    uint256 count
+    uint256 requested,
+    uint256 acquired
   );
 
   event VRFRequest(uint256 indexed arenaId, uint256 vrfRequestId);
@@ -473,13 +508,15 @@ contract PixelClash is
   event WithdrawPrize(uint256 indexed arenaId, address indexed player, uint256 prize);
 
   error AlreadyWithdrawn(uint256 arenaId, address player);
+  error GridTooBig(uint256 gridSize, uint256 max);
   error GridTooSmall(uint256 gridSize);
-  error IncorrectPaymentAmount(uint256 got, uint256 want);
+  error InvalidPaymentAmount(uint256 got, uint256 want);
   error InvalidArenaId(uint256 id);
   error InvalidArgument();
   error InvalidState(uint256 arenaId, uint256 state);
   error NoPrize(uint256 arenaId, address player);
   error PermissionDenied();
+  error SelfReferralForbidden();
 
   /// All payments and prizes are in this token.
   CurrencyToken public currencyToken;
@@ -585,6 +622,24 @@ contract PixelClash is
       });
   }
 
+  /// Returns the owner of a given pixel.
+  ///
+  /// @param arenaId The arena ID.
+  /// @param index The zero-based index of the pixel to query. Must be strictly less than the
+  ///   `gridSize` of the arena.
+  /// @return player The owner of the pixel, or the zero address if the pixel is in the gap.
+  /// @return teamB Whether the pixel has been acquired by team A or B. Ignore this value if the
+  ///   pixel is in the gap.
+  /// @return referrer The referrer through which the pixel was purchased, or zero if the pixel
+  ///   wasn't purchased through a referral.
+  function getPixelOwner(
+    uint256 arenaId,
+    uint256 index
+  ) public view returns (address player, bool teamB, address referrer) {
+    Arena storage arena = getArenaFromStorage(arenaId);
+    return arena.getPixelOwner(index);
+  }
+
   /// Returns the top 3 referrers (by generated revenue) for the specified arena.
   ///
   /// The returned elements are sorted in descending order: the first one is the top referrer, the
@@ -620,6 +675,9 @@ contract PixelClash is
     bytes32 r,
     bytes32 s
   ) public whenNotPaused nonReentrant {
+    if (params.gridSize > MAX_GRID_SIZE) {
+      revert GridTooBig(params.gridSize, MAX_GRID_SIZE);
+    }
     address owner = msg.sender;
     uint256 fee = arenaCreationFee();
     try currencyToken.permit(owner, address(this), fee, deadline, v, r, s) {} catch {}
@@ -645,13 +703,17 @@ contract PixelClash is
     if (numPixelsPerTeam * 2 >= arena.gridSize) {
       revert GridTooSmall(arena.gridSize);
     }
-    arena.teamA.push(Range({owner: owner, offset: 0, length: numPixelsPerTeam}));
+    arena.teamA.push(
+      Range({owner: owner, offset: 0, length: numPixelsPerTeam, referrer: address(0)})
+    );
     arena.teamAShares[owner] += numPixelsPerTeam;
-    arena.teamB.push(Range({owner: owner, offset: 0, length: numPixelsPerTeam}));
+    arena.teamB.push(
+      Range({owner: owner, offset: 0, length: numPixelsPerTeam, referrer: address(0)})
+    );
     arena.teamBShares[owner] += numPixelsPerTeam;
     emit CreateArena(owner, id);
-    emit PurchasePixels(owner, id, false, numPixelsPerTeam);
-    emit PurchasePixels(owner, id, true, numPixelsPerTeam);
+    emit PurchasePixels(owner, id, false, numPixelsPerTeam, numPixelsPerTeam);
+    emit PurchasePixels(owner, id, true, numPixelsPerTeam, numPixelsPerTeam);
   }
 
   /// Acquires one or more pixels in an arena.
@@ -686,6 +748,9 @@ contract PixelClash is
     bytes32 s
   ) public whenNotPaused nonReentrant {
     address player = msg.sender;
+    if (player == referrer) {
+      revert SelfReferralForbidden();
+    }
 
     Arena storage arena = getArenaFromStorage(arenaId);
     {
@@ -699,18 +764,18 @@ contract PixelClash is
       revert InvalidArgument();
     }
 
-    uint256 availablePixels = arena.getAvailablePixels();
-    if (count > availablePixels) {
-      count = availablePixels;
-    }
-
-    arena.acquirePixels(player, pixelFee(), count, teamB, referrer);
-
-    uint256 fee = pixelFee() * count;
+    uint256 feePerPixel = pixelFee();
+    uint256 fee = feePerPixel * count;
     try currencyToken.permit(player, address(this), fee, deadline, v, r, s) {} catch {}
     currencyToken.safeTransferFrom(player, address(this), fee);
 
-    emit PurchasePixels(player, arenaId, teamB, count);
+    uint256 acquired = arena.acquirePixels(player, feePerPixel, count, teamB, referrer);
+    if (acquired < count) {
+      uint256 refund = feePerPixel * (count - acquired);
+      currencyToken.safeTransfer(player, refund);
+    }
+
+    emit PurchasePixels(player, arenaId, teamB, count, acquired);
   }
 
   /// Returns the price of a draw in ETH.
@@ -740,7 +805,7 @@ contract PixelClash is
 
     uint256 price = getDrawPrice();
     if (msg.value < price) {
-      revert IncorrectPaymentAmount(msg.value, price);
+      revert InvalidPaymentAmount(msg.value, price);
     }
     uint256 refund = msg.value - price;
 
@@ -772,6 +837,7 @@ contract PixelClash is
       }
     }
     assert(arena.vrfRequestId == requestId);
+    delete arenaIdsByVrfRequestId[requestId];
 
     (uint256 winner, uint256 revenue) = arena.draw(random);
     uint256 pixelAmount = abi.decode(poolManager.unlock(abi.encode(revenue)), (uint256));

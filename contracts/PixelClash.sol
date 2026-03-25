@@ -40,12 +40,6 @@ uint256 constant ARENA_STATE_DRAWN = 4;
 // Arena creation fee in USD cents. Currently $20.
 uint256 constant ARENA_CREATION_FEE = 2000;
 
-// Price of a single pixel in USD cents. $1 = 1 pixel.
-uint256 constant PIXEL_FEE = 100;
-
-// All arenas are unlocked after this time even if the grid wasn't fully filled.
-uint256 constant ARENA_TIMEOUT = 7 days;
-
 // ChainLink VRF callback gas limit.
 uint32 constant VRF_CALLBACK_GAS_LIMIT = 1_000_000;
 
@@ -77,7 +71,8 @@ struct Range {
 }
 
 struct Arena {
-  /// The time at which the arena was created.
+  /// The time at which the arena was created. This is in seconds because it's taken from
+  /// `block.timestamp`.
   uint256 creationTimestamp;
   /// The user who created the arena.
   address owner;
@@ -103,6 +98,11 @@ struct Arena {
   uint32 teamBColor;
   /// Number of pixels in the grid.
   uint256 gridSize;
+  /// The price of a single pixel in this arena.
+  uint256 pixelFee;
+  /// The maximum duration of the arena, in seconds. The arena automatically times out if it doesn't
+  /// get filled before `creationTimestamp + maxDuration`.
+  uint256 maxDuration;
   /// Ranges of pixels acquired by team A. These are ordered chronologically, so the offset of the
   /// last range is always equal to the offset+length of the second-last.
   Range[] teamA;
@@ -145,6 +145,8 @@ struct ArenaData {
   bytes32 teamBLogoCid;
   uint32 teamBColor;
   uint256 gridSize;
+  uint256 pixelFee;
+  uint256 maxDuration;
   uint256 state;
   uint256 teamACount;
   uint256 teamBCount;
@@ -164,6 +166,8 @@ struct CreateArenaParams {
   bytes32 teamBLogoCid;
   uint32 teamBColor;
   uint256 gridSize;
+  uint256 pixelFee;
+  uint256 maxDuration;
 }
 
 library ArenaMethods {
@@ -192,7 +196,7 @@ library ArenaMethods {
   }
 
   function isTimedOut(Arena storage arena) private view returns (bool) {
-    return block.timestamp >= arena.creationTimestamp + ARENA_TIMEOUT;
+    return block.timestamp >= arena.creationTimestamp + arena.maxDuration;
   }
 
   function isDrawing(Arena storage arena) private view returns (bool) {
@@ -235,7 +239,6 @@ library ArenaMethods {
   ///
   /// @param arena The `Arena` instance.
   /// @param player Address of the player acquiring the pixels.
-  /// @param pixelFee The cost of each pixel.
   /// @param count The number of pixels to acquire.
   /// @param teamB Whether tha player is playing in team A or B. If true, the pixels will be
   ///   acquired by team B, otherwise they'll be acquire by team A.
@@ -245,7 +248,6 @@ library ArenaMethods {
   function acquirePixels(
     Arena storage arena,
     address player,
-    uint256 pixelFee,
     uint256 count,
     bool teamB,
     address referrer
@@ -267,7 +269,7 @@ library ArenaMethods {
       );
       arena.teamAShares[player] += acquired;
     }
-    uint256 fee = pixelFee * acquired;
+    uint256 fee = arena.pixelFee * acquired;
     arena.revenue += fee;
     arena.balance += fee;
     if (referrer != address(0)) {
@@ -325,6 +327,7 @@ library ArenaMethods {
       // index is in the gap
       return (address(0), false, address(0));
     }
+    // we should never get here
     assert(false);
   }
 
@@ -402,15 +405,22 @@ library ArenaMethods {
     return (arena.revenue * TEAM_PRIZE * playerPixels) / (100 * teamPixels);
   }
 
-  /// Returns the prize for the referrer of the winner, or zero if the winner had no referrer.
-  function getSponsorPrize(Arena storage arena) public view returns (uint256) {
-    assert(getState(arena) >= ARENA_STATE_DRAWN);
-    (, , address referrer) = getPixelOwner(arena, uint256(arena.winner));
+  function getSponsorPrizeImpl(
+    Arena storage arena,
+    address referrer
+  ) private view returns (uint256) {
     if (referrer != address(0)) {
       return (arena.revenue * SPONSOR_PRIZE) / 100;
     } else {
       return 0;
     }
+  }
+
+  /// Returns the prize for the referrer of the winner, or zero if the winner had no referrer.
+  function getSponsorPrize(Arena storage arena) public view returns (uint256) {
+    assert(getState(arena) >= ARENA_STATE_DRAWN);
+    (, , address referrer) = getPixelOwner(arena, uint256(arena.winner));
+    return getSponsorPrizeImpl(arena, referrer);
   }
 
   function getTopReferralPrize1(Arena storage arena) public view returns (uint256) {
@@ -459,6 +469,7 @@ library ArenaMethods {
     if (referrers.length > 2 && referrers[2].referrer == player) {
       return (arena.revenue * TOP_REFERRAL_PRIZE_3) / 100;
     }
+    delete referrers;
     return 0;
   }
 
@@ -486,7 +497,7 @@ library ArenaMethods {
     (address winner, , address referrer) = getPixelOwner(arena, uint256(arena.winner));
     uint256 winnerPrize = (player != winner) ? 0 : getWinnerPrize(arena);
     uint256 teamPrize = getTeamPrizeFor(arena, player);
-    uint256 sponsorPrize = (player != referrer) ? 0 : getSponsorPrize(arena);
+    uint256 sponsorPrize = (player != referrer) ? 0 : getSponsorPrizeImpl(arena, referrer);
     uint256 topReferralPrize = getTopReferralPrizeFor(arena, player);
     uint256 ownerPrize = (player != arena.owner) ? 0 : getArenaOwnerPrize(arena);
     return winnerPrize + teamPrize + sponsorPrize + topReferralPrize + ownerPrize;
@@ -592,14 +603,6 @@ contract PixelClash is
     return (ARENA_CREATION_FEE * (10 ** currencyToken.decimals())) / 100;
   }
 
-  function pixelFee() public view returns (uint256) {
-    return (PIXEL_FEE * (10 ** currencyToken.decimals())) / 100;
-  }
-
-  function arenaTimeOut() public pure returns (uint256) {
-    return ARENA_TIMEOUT;
-  }
-
   function getArenaFromStorage(uint256 id) private view returns (Arena storage arena) {
     if (id == 0 || id >= arenas.length) {
       revert InvalidArenaId(id);
@@ -626,6 +629,8 @@ contract PixelClash is
         teamBLogoCid: arena.teamBLogoCid,
         teamBColor: arena.teamBColor,
         gridSize: arena.gridSize,
+        pixelFee: arena.pixelFee,
+        maxDuration: arena.maxDuration,
         state: arena.getState(),
         teamACount: arena.getTeamACount(),
         teamBCount: arena.getTeamBCount(),
@@ -722,10 +727,12 @@ contract PixelClash is
     arena.teamBLogoCid = params.teamBLogoCid;
     arena.teamBColor = params.teamBColor;
     arena.gridSize = params.gridSize;
+    arena.pixelFee = params.pixelFee;
+    arena.maxDuration = params.maxDuration;
     arena.revenue = fee;
     arena.balance = fee;
     arena.winner = -1;
-    uint256 numPixelsPerTeam = fee / pixelFee() / 2;
+    uint256 numPixelsPerTeam = fee / arena.pixelFee / 2;
     if (numPixelsPerTeam * 2 >= arena.gridSize) {
       revert GridTooSmall(arena.gridSize);
     }
@@ -790,14 +797,13 @@ contract PixelClash is
       revert InvalidArgument();
     }
 
-    uint256 feePerPixel = pixelFee();
-    uint256 fee = feePerPixel * count;
+    uint256 fee = arena.pixelFee * count;
     try currencyToken.permit(player, address(this), fee, deadline, v, r, s) {} catch {}
     currencyToken.safeTransferFrom(player, address(this), fee);
 
-    uint256 acquired = arena.acquirePixels(player, feePerPixel, count, teamB, referrer);
+    uint256 acquired = arena.acquirePixels(player, count, teamB, referrer);
     if (acquired < count) {
-      uint256 refund = feePerPixel * (count - acquired);
+      uint256 refund = arena.pixelFee * (count - acquired);
       currencyToken.safeTransfer(player, refund);
     }
 

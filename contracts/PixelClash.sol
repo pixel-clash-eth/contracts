@@ -28,7 +28,7 @@ import {VRFClient, VRFConsumer} from "./VRFConsumer.sol";
 using ReferralHeapMethods for ReferralHeap;
 
 // Maximum arena grid size.
-uint256 constant MAX_GRID_SIZE = 1e12;
+uint256 constant MAX_GRID_SIZE = 1e19;
 
 // Arena states.
 uint256 constant ARENA_STATE_OPEN = 0;

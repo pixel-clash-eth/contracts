@@ -64,6 +64,7 @@ library ReferralHeapMethods {
       index -= 1;
       heap.queue[index].revenue += revenue;
     } else {
+      assert(heap.queue.length < uint256(type(uint64).max));
       index = uint64(heap.queue.length);
       heap.queue.push(ReferralRevenue({referrer: referrer, revenue: revenue}));
       heap.indices[referrer] = index + 1;

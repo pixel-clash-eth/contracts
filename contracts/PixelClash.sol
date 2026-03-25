@@ -6,6 +6,7 @@ import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/Pau
 import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -22,7 +23,6 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 import {ReferralHeap, ReferralHeapMethods, ReferralRevenue} from "./Heap.sol";
-import {PixelToken} from "./Token.sol";
 import {VRFClient, VRFConsumer} from "./VRFConsumer.sol";
 
 using ReferralHeapMethods for ReferralHeap;
@@ -522,15 +522,15 @@ contract PixelClash is
   CurrencyToken public currencyToken;
 
   /// All revenue is converted to this token and burned.
-  PixelToken public pixelToken;
+  ERC20Burnable public pixelToken;
 
   /// ChainLink VRF consumer.
   VRFConsumer public vrfConsumer;
 
-  /// Uniswap V4 pool manager used to swap CurrencyToken for PixelToken.
+  /// Uniswap V4 pool manager used to swap currencyToken for pixelToken.
   IPoolManager public poolManager;
 
-  /// Uniswap V4 pool key identifying the CurrencyToken / PixelToken pool.
+  /// Uniswap V4 pool key identifying the currencyToken / pixelToken pool.
   PoolKey public swapPoolKey;
 
   /// List of arenas.
@@ -547,7 +547,7 @@ contract PixelClash is
   function initialize(
     address initialOwner,
     CurrencyToken currencyToken_,
-    PixelToken pixelToken_,
+    ERC20Burnable pixelToken_,
     address vrfCoordinator,
     IPoolManager poolManager_,
     PoolKey memory swapPoolKey_

@@ -7,8 +7,18 @@ import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC2
 import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 
 contract MockToken is ERC20, ERC20Burnable, Ownable, ERC20Permit {
-  constructor(address owner) ERC20("MockToken", "MTK") Ownable(owner) ERC20Permit("MockToken") {
+  uint8 private immutable _decimals;
+
+  constructor(
+    uint8 decimals_,
+    address owner
+  ) ERC20("MockToken", "MTK") Ownable(owner) ERC20Permit("MockToken") {
+    _decimals = decimals_;
     _mint(owner, 1e9 * 10 ** decimals());
+  }
+
+  function decimals() public view override returns (uint8) {
+    return _decimals;
   }
 
   function mint(uint256 amount) public {

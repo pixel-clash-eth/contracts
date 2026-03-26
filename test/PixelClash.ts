@@ -14,9 +14,7 @@ const POOL_MANAGER_ADDRESS = "0x000000000004444c5dc75cB358380D2e3dE08A90";
 
 const INVALID_ARENA_ID = 0;
 
-// NOTE: this is actually 1 USDC in the `MockToken`, so we're using 18 decimals. The production
-// setup will refer to the real USDC which uses 6 decimals.
-const ONE_USDC = 1_000_000_000_000_000_000n;
+const ONE_USDC = 1_000_000n; // 1 USDC (6 decimals, matching real USDC)
 
 const STANDARD_GRID_SIZE = 10_000;
 const STANDARD_MAX_DURATION = 3600n * 24n * 7n; // 7 days
@@ -29,7 +27,14 @@ const ARENA_STATE_DRAWN = 4;
 
 describe("PixelClash", function () {
   async function deployFixture() {
+    const [, owner] = await ethers.getSigners();
     const deployer = await Deployer.create();
+
+    const currencyToken = await deployer.deploy<MockToken>(
+      "MockToken",
+      /*decimals=*/ 6,
+      owner.address,
+    );
 
     const mockVRFCoordinator = await deployer.deploy<MockVRFCoordinator>(
       "MockVRFCoordinator",
@@ -68,9 +73,6 @@ describe("PixelClash", function () {
 
     await mockVRFCoordinator.addConsumer(subscriptionId, await mockVRFWrapper.getAddress());
 
-    const [, owner] = await ethers.getSigners();
-
-    const currencyToken = await deployer.deploy<MockToken>("MockToken", owner.address);
     process.env.OWNER_ADDRESS = owner.address;
     process.env.CURRENCY_TOKEN = await currencyToken.getAddress();
     process.env.CHAIN_LINK_VRF_WRAPPER = await mockVRFWrapper.getAddress();

@@ -44,6 +44,7 @@ const config: HardhatUserConfig = {
     },
   },
   gasReporter: {
+    enabled: true,
     currency: "USD",
     L1: "ethereum",
   },

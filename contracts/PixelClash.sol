@@ -603,11 +603,12 @@ contract PixelClash is
   error NoPrize(uint256 arenaId, address player);
   error PermissionDenied();
   error SelfReferralForbidden();
+  error SlippageTooHigh(uint256 got, uint256 want);
 
   /// All payments and prizes are in this token.
   CurrencyToken public currencyToken;
 
-  /// All revenue is converted to this token and burned.
+  /// All revenue is converted to this token and burned (see `burnRevenue`).
   ERC20Burnable public pixelToken;
 
   /// ChainLink VRF consumer.
@@ -621,6 +622,9 @@ contract PixelClash is
 
   /// List of arenas.
   Arena[] private arenas;
+
+  /// Protocol revenue in USDC.
+  uint256 public protocolRevenue;
 
   /// Arena IDs indexed by VRF request ID. Used to retrieve the correct arena in the VRF callback.
   mapping(uint256 => uint256) public arenaIdsByVrfRequestId;
@@ -816,8 +820,6 @@ contract PixelClash is
     arena.gridSize = params.gridSize;
     arena.pixelFee = params.pixelFee;
     arena.maxDuration = params.maxDuration;
-    arena.revenue = fee;
-    arena.balance = fee;
     arena.winner = -1;
     uint256 numPixelsPerTeam = fee / arena.pixelFee / 2;
     if (numPixelsPerTeam * 2 >= arena.gridSize) {
@@ -831,6 +833,8 @@ contract PixelClash is
       Range({owner: owner, offset: 0, length: numPixelsPerTeam, referrer: address(0)})
     );
     arena.teamBShares[owner] += numPixelsPerTeam;
+
+    protocolRevenue += fee;
 
     emit CreateArena(owner, id);
     emit PurchasePixels(owner, id, false, numPixelsPerTeam, numPixelsPerTeam);
@@ -949,10 +953,19 @@ contract PixelClash is
     delete arenaIdsByVrfRequestId[requestId];
 
     (uint256 winner, uint256 revenue) = arena.draw(random);
-    uint256 pixelAmount = abi.decode(poolManager.unlock(abi.encode(revenue)), (uint256));
-    pixelToken.burn(pixelAmount);
+    protocolRevenue += revenue;
 
     emit ArenaClosure(arenaId, requestId, winner);
+  }
+
+  /// Swaps the revenue collected by the protocol so far and burns it.
+  function burnRevenue(uint256 minPixelAmount) public onlyOwner {
+    uint256 pixelAmount = abi.decode(poolManager.unlock(abi.encode(protocolRevenue)), (uint256));
+    if (pixelAmount < minPixelAmount) {
+      revert SlippageTooHigh(pixelAmount, minPixelAmount);
+    }
+    pixelToken.burn(pixelAmount);
+    protocolRevenue = 0;
   }
 
   /// @inheritdoc IUnlockCallback

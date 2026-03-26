@@ -154,12 +154,14 @@ describe("PixelClash", function () {
     expect(arenaData.state).to.equal(ARENA_STATE_OPEN);
     expect(arenaData.winner).to.equal(-1n);
     expect(arenaData.creationTimestamp).to.be.greaterThan(0n);
-    expect(arenaData.revenue).to.equal(creationFee);
-    expect(arenaData.balance).to.equal(creationFee);
+    expect(arenaData.revenue).to.equal(0);
+    expect(arenaData.balance).to.equal(0);
 
     const numPixelsPerTeam = creationFee / pixelFee / 2n;
     expect(arenaData.teamACount).to.equal(numPixelsPerTeam);
     expect(arenaData.teamBCount).to.equal(numPixelsPerTeam);
+
+    expect(await pixelClash.protocolRevenue()).to.equal(creationFee);
   });
 
   it("purchase pixel in team A", async function () {
@@ -212,5 +214,7 @@ describe("PixelClash", function () {
     const numPixelsPerTeamFromCreation = creationFee / pixelFee / 2n;
     expect(arenaData.teamACount).to.equal(numPixelsPerTeamFromCreation + 1n);
     expect(arenaData.teamBCount).to.equal(numPixelsPerTeamFromCreation);
+
+    expect(await pixelClash.protocolRevenue()).to.equal(creationFee);
   });
 });

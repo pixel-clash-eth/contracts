@@ -161,4 +161,56 @@ describe("PixelClash", function () {
     expect(arenaData.teamACount).to.equal(numPixelsPerTeam);
     expect(arenaData.teamBCount).to.equal(numPixelsPerTeam);
   });
+
+  it("purchase pixel in team A", async function () {
+    const { currencyToken, pixelClash } = await loadFixture(deployFixture);
+
+    const [, , creator, player] = await ethers.getSigners();
+
+    const creationFee = 20n * ONE_USDC;
+    await currencyToken.connect(creator).mint(creationFee);
+    await currencyToken.connect(creator).approve(await pixelClash.getAddress(), creationFee);
+
+    const pixelFee = ONE_USDC;
+    const params = {
+      teamAName: "Dogs",
+      teamALogo: "\u{1F436}",
+      teamALogoCid: ethers.ZeroHash,
+      teamAColor: 0xff0000,
+      teamBName: "Cats",
+      teamBLogo: "\u{1F431}",
+      teamBLogoCid: ethers.ZeroHash,
+      teamBColor: 0x0000ff,
+      gridSize: STANDARD_GRID_SIZE,
+      pixelFee,
+      maxDuration: STANDARD_MAX_DURATION,
+    };
+
+    await pixelClash
+      .connect(creator)
+      .createArenaWithPermit(params, ethers.MaxUint256, 0, ethers.ZeroHash, ethers.ZeroHash);
+
+    await currencyToken.connect(player).mint(pixelFee);
+    await currencyToken.connect(player).approve(await pixelClash.getAddress(), pixelFee);
+
+    const arenaId = 1;
+    const teamB = false;
+    await pixelClash
+      .connect(player)
+      .purchasePixelsWithPermit(
+        arenaId,
+        teamB,
+        1,
+        ethers.ZeroAddress,
+        ethers.MaxUint256,
+        0,
+        ethers.ZeroHash,
+        ethers.ZeroHash,
+      );
+
+    const arenaData = await pixelClash.getArenaData(arenaId);
+    const numPixelsPerTeamFromCreation = creationFee / pixelFee / 2n;
+    expect(arenaData.teamACount).to.equal(numPixelsPerTeamFromCreation + 1n);
+    expect(arenaData.teamBCount).to.equal(numPixelsPerTeamFromCreation);
+  });
 });

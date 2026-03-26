@@ -25,8 +25,6 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {ReferralHeap, ReferralHeapMethods, ReferralRevenue} from "./Heap.sol";
 import {VRFClient, VRFConsumer} from "./VRFConsumer.sol";
 
-using ReferralHeapMethods for ReferralHeap;
-
 // Maximum arena grid size.
 uint256 constant MAX_GRID_SIZE = 1e19;
 
@@ -171,6 +169,8 @@ struct CreateArenaParams {
 }
 
 library ArenaMethods {
+  using ReferralHeapMethods for ReferralHeap;
+
   /// Returns the number of pixels acquired by team A.
   function getTeamACount(Arena storage arena) public view returns (uint256) {
     Range storage lastRange = arena.teamA[arena.teamA.length - 1];
@@ -343,6 +343,22 @@ library ArenaMethods {
     address referrer
   ) public view returns (uint256) {
     return arena.referrals.getRevenueFrom(referrer);
+  }
+
+  /// Returns the top three referrers by generated revenue, along with their respective generated
+  /// revenues.
+  ///
+  /// The returned elements are sorted in descending order (ie. the first one is the top referrer,
+  /// the one that generated the most revenue).
+  ///
+  /// Note that less than 3 elements may be returned if an arena has had less than 3 referrers (not
+  /// referrals!) so far. For this function to return at least 3 elements, at least 3 different
+  /// addresses must have successfully referred other players.
+  ///
+  /// @param arena The `Arena` instance.
+  /// @return The 3 referrers.
+  function getTop3Referrers(Arena storage arena) public view returns (ReferralRevenue[] memory) {
+    return arena.referrals.getTop3();
   }
 
   /// Picks the arena winner and transitions into the "drawn" state.
@@ -579,13 +595,14 @@ contract PixelClash is
   ) public initializer {
     __Ownable_init(initialOwner);
     __Pausable_init();
+
     currencyToken = currencyToken_;
     pixelToken = pixelToken_;
     vrfConsumer = new VRFConsumer(vrfCoordinator);
     poolManager = poolManager_;
     swapPoolKey = swapPoolKey_;
 
-    // Skip arena #0 because ID 0 is considered invalid.
+    // Skip arena #0 because ID 0 is conventionally invalid.
     arenas.push();
   }
 
@@ -686,7 +703,7 @@ contract PixelClash is
     uint256 arenaId
   ) public view returns (ReferralRevenue[] memory referrers) {
     Arena storage arena = getArenaFromStorage(arenaId);
-    return arena.referrals.getTop3();
+    return arena.getTop3Referrers();
   }
 
   /// Creates a new pixel arena.

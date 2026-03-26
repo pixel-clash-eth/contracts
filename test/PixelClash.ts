@@ -1,109 +1,94 @@
-import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
-import { time, loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { expect } from "chai";
 import { ethers } from "hardhat";
 
-describe("Lock", function () {
-  // We define a fixture to reuse the same setup in every test.
-  // We use loadFixture to run this setup once, snapshot that state,
-  // and reset Hardhat Network to that snapshot in every test.
-  async function deployOneYearLockFixture() {
-    const ONE_YEAR_IN_SECS = 365 * 24 * 60 * 60;
-    const ONE_GWEI = 1_000_000_000;
+import { Deployer } from "../scripts/deployer";
 
-    const lockedAmount = ONE_GWEI;
-    const unlockTime = (await time.latest()) + ONE_YEAR_IN_SECS;
+describe("PixelClash", function () {
+  /// Deploys the full contract suite using the production Deployer, substituting external
+  /// dependencies (VRF wrapper, pool manager, currency token) with lightweight test doubles.
+  async function deployFixture() {
+    const [, owner] = await ethers.getSigners();
 
-    // Contracts are deployed using the first signer/account by default
-    const [owner, otherAccount] = await ethers.getSigners();
+    // MockVRFWrapper satisfies the one call made during VRFConsumer construction: `link()`.
+    const mockVRFWrapper = await (await ethers.getContractFactory("MockVRFWrapper")).deploy();
+    await mockVRFWrapper.waitForDeployment();
 
-    const Lock = await ethers.getContractFactory("Lock");
-    const lock = await Lock.deploy(unlockTime, { value: lockedAmount });
+    // Use the real USDC contract from the mainnet fork as the currency token.
+    const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+    const currencyToken = await ethers.getContractAt("IERC20", USDC_ADDRESS);
 
-    return { lock, unlockTime, lockedAmount, owner, otherAccount };
+    // Pool manager is only stored during initialisation; no functions are called on it at
+    // deployment time, so any address works.
+    const mockPoolManagerAddress = owner.address;
+
+    process.env.OWNER_ADDRESS = owner.address;
+    process.env.CURRENCY_TOKEN = await currencyToken.getAddress();
+    process.env.CHAIN_LINK_VRF_WRAPPER = await mockVRFWrapper.getAddress();
+    process.env.UNISWAP_V4_POOL_MANAGER = mockPoolManagerAddress;
+    process.env.PIXEL_POOL_FEE = "3000";
+    process.env.PIXEL_POOL_TICK_SPACING = "60";
+
+    const deployer = await Deployer.create();
+    const pixelToken = await deployer.deployToken();
+    const pixelClash = await deployer.deployPixelClash(pixelToken);
+    const [controller, governor] = await deployer.deployGovernance(pixelToken, pixelClash);
+
+    return { pixelClash, pixelToken, currencyToken, controller, governor, owner };
   }
 
-  describe("Deployment", function () {
-    it("Should set the right unlockTime", async function () {
-      const { lock, unlockTime } = await loadFixture(deployOneYearLockFixture);
+  describe("initial state", function () {
+    it("references the correct token contracts", async function () {
+      const { pixelClash, pixelToken, currencyToken } = await loadFixture(deployFixture);
 
-      expect(await lock.unlockTime()).to.equal(unlockTime);
+      expect(await pixelClash.currencyToken()).to.equal(await currencyToken.getAddress());
+      expect(await pixelClash.pixelToken()).to.equal(await pixelToken.getAddress());
     });
 
-    it("Should set the right owner", async function () {
-      const { lock, owner } = await loadFixture(deployOneYearLockFixture);
+    it("has a deployed VRF consumer", async function () {
+      const { pixelClash } = await loadFixture(deployFixture);
 
-      expect(await lock.owner()).to.equal(owner.address);
+      expect(await pixelClash.vrfConsumer()).to.not.equal(ethers.ZeroAddress);
     });
 
-    it("Should receive and store the funds to lock", async function () {
-      const { lock, lockedAmount } = await loadFixture(deployOneYearLockFixture);
+    it("references the correct pool manager", async function () {
+      const { pixelClash, owner } = await loadFixture(deployFixture);
 
-      expect(await ethers.provider.getBalance(lock.target)).to.equal(lockedAmount);
+      expect(await pixelClash.poolManager()).to.equal(owner.address);
     });
 
-    it("Should fail if the unlockTime is not in the future", async function () {
-      // We don't use the fixture here because we want a different deployment
-      const latestTime = await time.latest();
-      const Lock = await ethers.getContractFactory("Lock");
-      await expect(Lock.deploy(latestTime, { value: 1 })).to.be.revertedWith(
-        "Unlock time should be in the future",
+    it("is not paused", async function () {
+      const { pixelClash } = await loadFixture(deployFixture);
+
+      expect(await pixelClash.paused()).to.be.false;
+    });
+
+    it("transfers ownership to the controller after governance deployment", async function () {
+      const { pixelClash, controller } = await loadFixture(deployFixture);
+
+      expect(await pixelClash.owner()).to.equal(await controller.getAddress());
+    });
+
+    it("has no arenas", async function () {
+      const { pixelClash } = await loadFixture(deployFixture);
+
+      // Arena ID 0 is reserved and intentionally skipped; ID 1 does not exist yet.
+      await expect(pixelClash.getArenaData(0)).to.be.revertedWithCustomError(
+        pixelClash,
+        "InvalidArenaId",
+      );
+      await expect(pixelClash.getArenaData(1)).to.be.revertedWithCustomError(
+        pixelClash,
+        "InvalidArenaId",
       );
     });
-  });
 
-  describe("Withdrawals", function () {
-    describe("Validations", function () {
-      it("Should revert with the right error if called too soon", async function () {
-        const { lock } = await loadFixture(deployOneYearLockFixture);
+    it("computes the arena creation fee from the currency token decimals", async function () {
+      const { pixelClash } = await loadFixture(deployFixture);
 
-        await expect(lock.withdraw()).to.be.revertedWith("You can't withdraw yet");
-      });
-
-      it("Should revert with the right error if called from another account", async function () {
-        const { lock, unlockTime, otherAccount } = await loadFixture(deployOneYearLockFixture);
-
-        // We can increase the time in Hardhat Network
-        await time.increaseTo(unlockTime);
-
-        // We use lock.connect() to send a transaction from another account
-        await expect(lock.connect(otherAccount).withdraw()).to.be.revertedWith(
-          "You aren't the owner",
-        );
-      });
-
-      it("Shouldn't fail if the unlockTime has arrived and the owner calls it", async function () {
-        const { lock, unlockTime } = await loadFixture(deployOneYearLockFixture);
-
-        // Transactions are sent using the first signer by default
-        await time.increaseTo(unlockTime);
-
-        await expect(lock.withdraw()).not.to.be.reverted;
-      });
-    });
-
-    describe("Events", function () {
-      it("Should emit an event on withdrawals", async function () {
-        const { lock, unlockTime, lockedAmount } = await loadFixture(deployOneYearLockFixture);
-
-        await time.increaseTo(unlockTime);
-
-        await expect(lock.withdraw()).to.emit(lock, "Withdrawal").withArgs(lockedAmount, anyValue); // We accept any value as `when` arg
-      });
-    });
-
-    describe("Transfers", function () {
-      it("Should transfer the funds to the owner", async function () {
-        const { lock, unlockTime, lockedAmount, owner } =
-          await loadFixture(deployOneYearLockFixture);
-
-        await time.increaseTo(unlockTime);
-
-        await expect(lock.withdraw()).to.changeEtherBalances(
-          [owner, lock],
-          [lockedAmount, -lockedAmount],
-        );
-      });
+      // ARENA_CREATION_FEE = 2000 cents ($20); USDC has 6 decimals.
+      // fee = (2000 * 10^6) / 100 = 20 * 10^6
+      expect(await pixelClash.arenaCreationFee()).to.equal(ethers.parseUnits("20", 6));
     });
   });
 });

@@ -5,6 +5,11 @@ import type { PixelClash, PixelController, PixelGovernor, PixelToken } from "../
 
 import { requireEnv } from "./utils";
 
+interface DeployOptions {
+  name: string;
+  libraries?: { [name: string]: string };
+}
+
 export class Deployer {
   private constructor(private readonly _account: AbstractSigner) {}
 
@@ -18,10 +23,23 @@ export class Deployer {
   }
 
   private async _deploy<Contract extends BaseContract>(
-    contractName: string,
+    options: string | DeployOptions,
     ...args: any[]
   ): Promise<Contract> {
-    const factory = await ethers.getContractFactory(contractName);
+    let contractName;
+    let libraries = {};
+    switch (typeof options) {
+      case "string":
+        contractName = options;
+        break;
+      case "object":
+        contractName = options.name;
+        libraries = options.libraries || {};
+        break;
+      default:
+        throw new Error("invalid deploy options");
+    }
+    const factory = await ethers.getContractFactory(contractName, { libraries });
     const contract = await factory.deploy(...args);
     await contract.waitForDeployment();
     return contract as Contract;
@@ -30,7 +48,7 @@ export class Deployer {
   public async deployToken(): Promise<PixelToken> {
     const ownerAddress = requireEnv("OWNER_ADDRESS");
     const token = await this._deploy<PixelToken>("PixelToken", ownerAddress);
-    console.log(`PixelToken:      ${await token.getAddress()}`);
+    console.log(`PixelToken:           ${await token.getAddress()}`);
     return token;
   }
 
@@ -56,7 +74,15 @@ export class Deployer {
       hooks: ethers.ZeroAddress,
     };
 
-    const PixelClashFactory = await ethers.getContractFactory("PixelClash");
+    const arenaMethods = await this._deploy("ArenaMethods");
+    const arenaMethodsAddress = await arenaMethods.getAddress();
+    console.log(`ArenaMethods:         ${arenaMethodsAddress}`);
+
+    const PixelClashFactory = await ethers.getContractFactory("PixelClash", {
+      libraries: {
+        ArenaMethods: arenaMethodsAddress,
+      },
+    });
     const pixelClash = await upgrades.deployProxy(
       PixelClashFactory,
       [
@@ -67,11 +93,14 @@ export class Deployer {
         poolManagerAddress,
         swapPoolKey,
       ],
-      { kind: "uups" },
+      {
+        kind: "uups",
+        unsafeAllow: ["external-library-linking"],
+      },
     );
     await pixelClash.waitForDeployment();
 
-    console.log(`PixelClash:      ${await pixelClash.getAddress()}`);
+    console.log(`PixelClash:           ${await pixelClash.getAddress()}`);
     return pixelClash;
   }
 
@@ -89,7 +118,7 @@ export class Deployer {
       /*admin=*/ await this.getAddress(),
     );
     const controllerAddress = await controller.getAddress();
-    console.log(`PixelController: ${controllerAddress}`);
+    console.log(`PixelController:      ${controllerAddress}`);
 
     await (await pixelClash.transferOwnership(controllerAddress)).wait();
     console.log("PixelClash ownership → PixelController");
@@ -100,7 +129,7 @@ export class Deployer {
       controllerAddress,
     );
     const governorAddress = await governor.getAddress();
-    console.log(`PixelGovernor:   ${governorAddress}`);
+    console.log(`PixelGovernor:        ${governorAddress}`);
 
     const PROPOSER_ROLE = await controller.PROPOSER_ROLE();
     const EXECUTOR_ROLE = await controller.EXECUTOR_ROLE();

@@ -22,14 +22,13 @@ const config: HardhatUserConfig = {
     },
   },
   networks: {
+    hardhat: {
+      chainId: 31337,
+    },
     mainnet: {
       chainId: 1,
       url: process.env.RPC_ADDRESS!,
       accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
-    },
-    test: {
-      chainId: 31337,
-      url: "https://localhost:8545",
     },
   },
   gasReporter: {

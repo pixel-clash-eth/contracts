@@ -1,10 +1,13 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.28;
 
-/// @dev Minimal mock for the ChainLink VRF V2+ wrapper. Only implements `link()`, which is called
-/// during VRFConsumer construction.
-contract MockVRFWrapper {
-  function link() external pure returns (address) {
-    return address(0);
-  }
+import {VRFV2PlusWrapper} from "@chainlink/contracts/src/v0.8/vrf/dev/VRFV2PlusWrapper.sol";
+
+contract MockVRFWrapper is VRFV2PlusWrapper {
+  constructor(
+    address link,
+    address linkNativeFeed,
+    address coordinator,
+    uint256 subId
+  ) VRFV2PlusWrapper(link, linkNativeFeed, coordinator, subId) {}
 }

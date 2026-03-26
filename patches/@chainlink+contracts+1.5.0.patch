@@ -1,0 +1,24 @@
+diff --git a/node_modules/@chainlink/contracts/src/v0.8/vrf/dev/SubscriptionAPI.sol b/node_modules/@chainlink/contracts/src/v0.8/vrf/dev/SubscriptionAPI.sol
+index 5d98556..6682704 100644
+--- a/node_modules/@chainlink/contracts/src/v0.8/vrf/dev/SubscriptionAPI.sol
++++ b/node_modules/@chainlink/contracts/src/v0.8/vrf/dev/SubscriptionAPI.sol
+@@ -6,7 +6,7 @@ import {AggregatorV3Interface} from "../../shared/interfaces/AggregatorV3Interfa
+ import {IERC677Receiver} from "../../shared/interfaces/IERC677Receiver.sol";
+ import {LinkTokenInterface} from "../../shared/interfaces/LinkTokenInterface.sol";
+ import {IVRFSubscriptionV2Plus} from "./interfaces/IVRFSubscriptionV2Plus.sol";
+-import {EnumerableSet} from "@openzeppelin/contracts@4.9.6/utils/structs/EnumerableSet.sol";
++import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+ 
+ abstract contract SubscriptionAPI is ConfirmedOwner, IERC677Receiver, IVRFSubscriptionV2Plus {
+   using EnumerableSet for EnumerableSet.UintSet;
+diff --git a/node_modules/@chainlink/contracts/src/v0.8/vrf/dev/VRFV2PlusWrapper.sol b/node_modules/@chainlink/contracts/src/v0.8/vrf/dev/VRFV2PlusWrapper.sol
+index 7d9d280..167b41a 100644
+--- a/node_modules/@chainlink/contracts/src/v0.8/vrf/dev/VRFV2PlusWrapper.sol
++++ b/node_modules/@chainlink/contracts/src/v0.8/vrf/dev/VRFV2PlusWrapper.sol
+@@ -1,5 +1,5 @@
+ // SPDX-License-Identifier: MIT
+-pragma solidity 0.8.19;
++pragma solidity ^0.8.19;
+ 
+ import {ConfirmedOwner} from "../../shared/access/ConfirmedOwner.sol";
+ 

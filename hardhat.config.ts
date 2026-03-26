@@ -24,6 +24,15 @@ const config: HardhatUserConfig = {
   networks: {
     hardhat: {
       chainId: 31337,
+      forking: {
+        url: process.env.RPC_ADDRESS!,
+        enabled: !!process.env.RPC_ADDRESS,
+      },
+    },
+    localhost: {
+      chainId: 31337,
+      url: "https://localhost:8545",
+      accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
     },
     mainnet: {
       chainId: 1,

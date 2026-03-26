@@ -24,4 +24,9 @@ contract PixelController is TimelockController {
   function unpause() public onlyRole(DEFAULT_ADMIN_ROLE) {
     pixelClash.unpause();
   }
+
+  /// Swaps the revenue collected by the protocol so far and burns it.
+  function burnRevenue(uint256 minPixelAmount) public onlyRole(DEFAULT_ADMIN_ROLE) {
+    burnRevenue(minPixelAmount);
+  }
 }

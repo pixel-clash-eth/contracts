@@ -184,14 +184,22 @@ library ArenaMethods {
 
   /// Returns the number of pixels acquired by team A.
   function getTeamACount(Arena storage arena) public view returns (uint256) {
-    Range storage lastRange = arena.teamA[arena.teamA.length - 1];
-    return lastRange.offset + lastRange.length;
+    if (arena.teamA.length > 0) {
+      Range storage lastRange = arena.teamA[arena.teamA.length - 1];
+      return lastRange.offset + lastRange.length;
+    } else {
+      return 0;
+    }
   }
 
   /// Returns the number of pixels acquired by team B.
   function getTeamBCount(Arena storage arena) public view returns (uint256) {
-    Range storage lastRange = arena.teamB[arena.teamB.length - 1];
-    return lastRange.offset + lastRange.length;
+    if (arena.teamB.length > 0) {
+      Range storage lastRange = arena.teamB[arena.teamB.length - 1];
+      return lastRange.offset + lastRange.length;
+    } else {
+      return 0;
+    }
   }
 
   /// Returns the number of pixels still available for purchase (the size of the "gap").
@@ -778,6 +786,20 @@ contract PixelClash is
     uint256 fee = arenaCreationFee();
     try currencyToken.permit(owner, address(this), fee, deadline, v, r, s) {} catch {}
     currencyToken.safeTransferFrom(owner, address(this), fee);
+
+    if (
+      (bytes(params.teamAName).length == 0) ||
+      (bytes(params.teamALogo).length == 0) ||
+      (bytes(params.teamBName).length == 0) ||
+      (bytes(params.teamBLogo).length == 0) ||
+      (params.gridSize == 0) ||
+      ((params.gridSize % 2) != 0) ||
+      (params.pixelFee == 0) ||
+      (params.maxDuration == 0)
+    ) {
+      revert InvalidArgument();
+    }
+
     uint256 id = arenas.length;
     arenas.push();
     Arena storage arena = arenas[id];
@@ -809,6 +831,7 @@ contract PixelClash is
       Range({owner: owner, offset: 0, length: numPixelsPerTeam, referrer: address(0)})
     );
     arena.teamBShares[owner] += numPixelsPerTeam;
+
     emit CreateArena(owner, id);
     emit PurchasePixels(owner, id, false, numPixelsPerTeam, numPixelsPerTeam);
     emit PurchasePixels(owner, id, true, numPixelsPerTeam, numPixelsPerTeam);

@@ -22,7 +22,7 @@ export class Deployer {
     return await this._account.getAddress();
   }
 
-  private async _deploy<Contract extends BaseContract>(
+  public async deploy<Contract extends BaseContract>(
     options: string | DeployOptions,
     ...args: any[]
   ): Promise<Contract> {
@@ -47,7 +47,7 @@ export class Deployer {
 
   public async deployToken(): Promise<PixelToken> {
     const ownerAddress = requireEnv("OWNER_ADDRESS");
-    const token = await this._deploy<PixelToken>("PixelToken", ownerAddress);
+    const token = await this.deploy<PixelToken>("PixelToken", ownerAddress);
     console.log(`PixelToken:           ${await token.getAddress()}`);
     return token;
   }
@@ -74,7 +74,7 @@ export class Deployer {
       hooks: ethers.ZeroAddress,
     };
 
-    const arenaMethods = await this._deploy("ArenaMethods");
+    const arenaMethods = await this.deploy("ArenaMethods");
     const arenaMethodsAddress = await arenaMethods.getAddress();
     console.log(`ArenaMethods:         ${arenaMethodsAddress}`);
 
@@ -110,7 +110,7 @@ export class Deployer {
   ): Promise<[PixelController, PixelGovernor]> {
     const ownerAddress = requireEnv("OWNER_ADDRESS");
 
-    const controller = await this._deploy<PixelController>(
+    const controller = await this.deploy<PixelController>(
       "PixelController",
       await pixelClash.getAddress(),
       /*proposers=*/ [],
@@ -123,7 +123,7 @@ export class Deployer {
     await (await pixelClash.transferOwnership(controllerAddress)).wait();
     console.log("PixelClash ownership → PixelController");
 
-    const governor = await this._deploy<PixelGovernor>(
+    const governor = await this.deploy<PixelGovernor>(
       "PixelGovernor",
       await pixelToken.getAddress(),
       controllerAddress,

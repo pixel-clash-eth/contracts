@@ -25,8 +25,11 @@ const config: HardhatUserConfig = {
     hardhat: {
       chainId: 31337,
       forking: {
-        url: process.env.RPC_ADDRESS!,
-        enabled: !!process.env.RPC_ADDRESS,
+        url: process.env.HARDHAT_RPC_ADDRESS!,
+        enabled: !!process.env.HARDHAT_RPC_ADDRESS,
+        blockNumber: process.env.HARDHAT_FORK_BLOCK
+          ? parseInt(process.env.HARDHAT_FORK_BLOCK!, 10)
+          : void 0,
       },
     },
     localhost: {
@@ -36,7 +39,7 @@ const config: HardhatUserConfig = {
     },
     mainnet: {
       chainId: 1,
-      url: process.env.RPC_ADDRESS!,
+      url: process.env.HARDHAT_RPC_ADDRESS!,
       accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
     },
   },

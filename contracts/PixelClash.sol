@@ -130,6 +130,17 @@ struct Arena {
   mapping(address => uint256) withdrawals;
 }
 
+/// Arena prize breakdown.
+///
+/// Used for data retrieval, both relatively to an individual player and a whole arena.
+struct Prizes {
+  uint256 winnerPrize;
+  uint256 teamPrize;
+  uint256 sponsorPrize;
+  uint256 topReferralPrize;
+  uint256 arenaOwnerPrize;
+}
+
 /// Contains a subset of `Arena`'s fields. Suitable for data retrieval.
 struct ArenaData {
   uint256 creationTimestamp;
@@ -496,27 +507,53 @@ library ArenaMethods {
     return (arena.revenue * ARENA_OWNER_PRIZE) / 100;
   }
 
-  /// Returns the sum of all prizes, which is 95% of the arena revenue.
-  function getTotalPrizes(Arena storage arena) public view returns (uint256) {
+  /// Returns all prizes for the arena.
+  function getAllPrizes(Arena storage arena) public view returns (Prizes memory) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
     return
-      getWinnerPrize(arena) +
-      getTeamPrize(arena) +
-      getSponsorPrize(arena) +
-      getTopReferralPrize(arena) +
-      getArenaOwnerPrize(arena);
+      Prizes({
+        winnerPrize: getWinnerPrize(arena),
+        teamPrize: getTeamPrize(arena),
+        sponsorPrize: getSponsorPrize(arena),
+        topReferralPrize: getTopReferralPrize(arena),
+        arenaOwnerPrize: getArenaOwnerPrize(arena)
+      });
   }
 
-  /// Returns the total prizes won by a player in this arena.
-  function getTotalPrizeFor(Arena storage arena, address player) public view returns (uint256) {
+  /// Returns the sum of all prizes for the arena.
+  function getTotalPrizes(Arena storage arena) public view returns (uint256) {
+    Prizes memory prizes = getAllPrizes(arena);
+    return
+      prizes.winnerPrize +
+      prizes.teamPrize +
+      prizes.sponsorPrize +
+      prizes.topReferralPrize +
+      prizes.arenaOwnerPrize;
+  }
+
+  /// Returns the prizes won by a player in this arena.
+  function getPrizesFor(Arena storage arena, address player) public view returns (Prizes memory) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
     (address winner, , address referrer) = getPixelOwner(arena, uint256(arena.winner));
-    uint256 winnerPrize = (player != winner) ? 0 : getWinnerPrize(arena);
-    uint256 teamPrize = getTeamPrizeFor(arena, player);
-    uint256 sponsorPrize = (player != referrer) ? 0 : getSponsorPrizeImpl(arena, referrer);
-    uint256 topReferralPrize = getTopReferralPrizeFor(arena, player);
-    uint256 ownerPrize = (player != arena.owner) ? 0 : getArenaOwnerPrize(arena);
-    return winnerPrize + teamPrize + sponsorPrize + topReferralPrize + ownerPrize;
+    return
+      Prizes({
+        winnerPrize: (player != winner) ? 0 : getWinnerPrize(arena),
+        teamPrize: getTeamPrizeFor(arena, player),
+        sponsorPrize: (player != referrer) ? 0 : getSponsorPrizeImpl(arena, referrer),
+        topReferralPrize: getTopReferralPrizeFor(arena, player),
+        arenaOwnerPrize: (player != arena.owner) ? 0 : getArenaOwnerPrize(arena)
+      });
+  }
+
+  /// Returns the sum of all prizes for a given player from this arena.
+  function getTotalPrizeFor(Arena storage arena, address player) public view returns (uint256) {
+    Prizes memory prizes = getPrizesFor(arena, player);
+    return
+      prizes.winnerPrize +
+      prizes.teamPrize +
+      prizes.sponsorPrize +
+      prizes.topReferralPrize +
+      prizes.arenaOwnerPrize;
   }
 }
 
@@ -554,7 +591,7 @@ contract PixelClash is
   error InvalidPaymentAmount(uint256 got, uint256 want);
   error InvalidArenaId(uint256 id);
   error InvalidArgument();
-  error InvalidState(uint256 arenaId, uint256 state);
+  error InvalidState(uint256 arenaId, uint256 got, uint256 want);
   error NoPrize(uint256 arenaId, address player);
   error PermissionDenied();
   error SelfReferralForbidden();
@@ -625,6 +662,17 @@ contract PixelClash is
       revert InvalidArenaId(id);
     }
     arena = arenas[id];
+  }
+
+  function getArenaAndCheckState(
+    uint256 arenaId,
+    uint256 expectedState
+  ) private view returns (Arena storage arena) {
+    arena = getArenaFromStorage(arenaId);
+    uint256 state = arena.getState();
+    if (state != expectedState) {
+      revert InvalidState(arenaId, state, expectedState);
+    }
   }
 
   /// Retrieves the state of the given arena.
@@ -802,13 +850,7 @@ contract PixelClash is
       revert SelfReferralForbidden();
     }
 
-    Arena storage arena = getArenaFromStorage(arenaId);
-    {
-      uint256 state = arena.getState();
-      if (state != ARENA_STATE_OPEN) {
-        revert InvalidState(arenaId, state);
-      }
-    }
+    Arena storage arena = getArenaAndCheckState(arenaId, ARENA_STATE_OPEN);
 
     if (count == 0) {
       revert InvalidArgument();
@@ -848,7 +890,8 @@ contract PixelClash is
     {
       uint256 state = arena.getState();
       if (state <= ARENA_STATE_OPEN || state >= ARENA_STATE_DRAWING) {
-        revert InvalidState(arenaId, state);
+        // we're actually OK with TIMED_OUT too, but the custom error takes only one expected state
+        revert InvalidState(arenaId, state, ARENA_STATE_FULL);
       }
     }
 
@@ -878,13 +921,7 @@ contract PixelClash is
     }
 
     uint256 arenaId = arenaIdsByVrfRequestId[requestId];
-    Arena storage arena = getArenaFromStorage(arenaId);
-    {
-      uint256 state = arena.getState();
-      if (state != ARENA_STATE_DRAWING) {
-        revert InvalidState(arenaId, state);
-      }
-    }
+    Arena storage arena = getArenaAndCheckState(arenaId, ARENA_STATE_DRAWING);
     assert(arena.vrfRequestId == requestId);
     delete arenaIdsByVrfRequestId[requestId];
 
@@ -929,15 +966,31 @@ contract PixelClash is
     return abi.encode(pixelAmount);
   }
 
-  /// Returns the total prizes won by a player in the given arena.
+  /// Returns all prizes for an arena.
+  ///
+  /// @param arenaId The arena ID.
+  /// @return The prize breakdown.
+  function getAllPrizes(uint256 arenaId) public view returns (Prizes memory) {
+    Arena storage arena = getArenaAndCheckState(arenaId, ARENA_STATE_DRAWN);
+    return arena.getAllPrizes();
+  }
+
+  /// Returns all prizes for a given player from an arena.
+  ///
+  /// @param arenaId The arena ID.
+  /// @param player The player to query.
+  /// @return The prize breakdown.
+  function getPrizesFor(uint256 arenaId, address player) public view returns (Prizes memory) {
+    Arena storage arena = getArenaAndCheckState(arenaId, ARENA_STATE_DRAWN);
+    return arena.getPrizesFor(player);
+  }
+
+  /// Returns the total prize won by a player in an arena. This is the sum of all prizes returned by
+  /// `getPrizesFor`.
   ///
   /// Reverts if the arena hasn't received its draw yet.
   function getPrizeFor(uint256 arenaId, address player) public view returns (uint256) {
-    Arena storage arena = getArenaFromStorage(arenaId);
-    uint256 state = arena.getState();
-    if (state < ARENA_STATE_DRAWN) {
-      revert InvalidState(arenaId, state);
-    }
+    Arena storage arena = getArenaAndCheckState(arenaId, ARENA_STATE_DRAWN);
     return arena.getTotalPrizeFor(player);
   }
 
@@ -948,13 +1001,7 @@ contract PixelClash is
   /// arena) the transaction is reverted.
   function withdrawPrize(uint256 arenaId) public whenNotPaused nonReentrant {
     address player = msg.sender;
-    Arena storage arena = getArenaFromStorage(arenaId);
-    {
-      uint256 state = arena.getState();
-      if (state < ARENA_STATE_DRAWN) {
-        revert InvalidState(arenaId, state);
-      }
-    }
+    Arena storage arena = getArenaAndCheckState(arenaId, ARENA_STATE_DRAWN);
     uint256 prize = arena.getTotalPrizeFor(player);
     if (prize == 0) {
       revert NoPrize(arenaId, player);

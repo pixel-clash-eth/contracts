@@ -5,7 +5,8 @@
   "scripts": {
     "postinstall": "patch-package",
     "lint": "hardhat check",
-    "build": "hardhat compile"
+    "build": "hardhat compile",
+    "test": "hardhat test --network hardhat"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-chai-matchers": "^2.1.2",

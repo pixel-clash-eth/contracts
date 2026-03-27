@@ -443,6 +443,9 @@ contract PixelClash is
   }
 
   /// Swaps the revenue collected by the protocol so far and burns it.
+  ///
+  /// @param minPixelAmount The minimum amount of pixel tokens the revenue is swapped for. This
+  ///   protects against sandwich attacks and other cases of high slippage.
   function burnRevenue(uint256 minPixelAmount) public onlyOwner {
     uint256 pixelAmount = abi.decode(poolManager.unlock(abi.encode(protocolRevenue)), (uint256));
     if (pixelAmount < minPixelAmount) {
@@ -509,6 +512,9 @@ contract PixelClash is
   /// `getPrizesFor`.
   ///
   /// Reverts if the arena hasn't received its draw yet.
+  ///
+  /// @param arenaId The arena ID.
+  /// @param player The player's address.
   function getPrizeFor(uint256 arenaId, address player) public view returns (uint256) {
     Arena storage arena = getArenaAndCheckState(arenaId, ARENA_STATE_DRAWN);
     return arena.getTotalPrizeFor(player);
@@ -519,6 +525,8 @@ contract PixelClash is
   /// The amount returned by `getPrize` for the same arena is transferred to the caller if it hasn't
   /// been transferred before. If the amount is zero (ie. the player didn't win anything from that
   /// arena) the transaction is reverted.
+  ///
+  /// @param arenaId The arena ID.
   function withdrawPrize(uint256 arenaId) public whenNotPaused nonReentrant {
     address player = msg.sender;
     Arena storage arena = getArenaAndCheckState(arenaId, ARENA_STATE_DRAWN);

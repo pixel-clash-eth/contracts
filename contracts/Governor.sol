@@ -2,7 +2,6 @@
 pragma solidity ^0.8.28;
 
 import {Governor} from "@openzeppelin/contracts/governance/Governor.sol";
-import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 import {GovernorCountingSimple} from "@openzeppelin/contracts/governance/extensions/GovernorCountingSimple.sol";
 import {GovernorSettings} from "@openzeppelin/contracts/governance/extensions/GovernorSettings.sol";
 import {GovernorTimelockControl} from "@openzeppelin/contracts/governance/extensions/GovernorTimelockControl.sol";

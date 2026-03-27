@@ -1,5 +1,6 @@
 import type { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox";
+import "@nomiclabs/hardhat-solhint";
 import "@openzeppelin/hardhat-upgrades";
 import * as dotenv from "dotenv";
 import "hardhat-gas-reporter";

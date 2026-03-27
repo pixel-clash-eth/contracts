@@ -12,15 +12,11 @@ import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC2
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {IUniswapV3Pool} from "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
+import {ISwapRouter} from "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
+
+import {SwapGateway} from "./SwapGateway.sol";
 
 import {
   Arena,
@@ -38,9 +34,6 @@ import {
 import {ReferralRevenue} from "./Heap.sol";
 import {VRFClient, VRFConsumer} from "./VRFConsumer.sol";
 
-// Maximum arena grid size.
-uint256 constant MAX_GRID_SIZE = 1e19;
-
 // Arena creation fee in USD cents. Currently $20.
 uint256 constant ARENA_CREATION_FEE = 2000;
 
@@ -55,8 +48,7 @@ contract PixelClash is
   PausableUpgradeable,
   ReentrancyGuardTransient,
   UUPSUpgradeable,
-  VRFClient,
-  IUnlockCallback
+  VRFClient
 {
   using Address for address payable;
   using SafeERC20 for ICurrencyToken;
@@ -100,8 +92,6 @@ contract PixelClash is
   event WithdrawPrize(uint256 indexed arenaId, address indexed player, uint256 prize);
 
   error AlreadyWithdrawn(uint256 arenaId, address player);
-  error GridTooBig(uint256 gridSize, uint256 max);
-  error GridTooSmall(uint256 gridSize);
   error InvalidPaymentAmount(uint256 got, uint256 want);
   error InvalidArenaId(uint256 id);
   error InvalidArgument();
@@ -109,28 +99,31 @@ contract PixelClash is
   error NoPrize(uint256 arenaId, address player);
   error PermissionDenied();
   error SelfReferralForbidden();
-  error SlippageTooHigh(uint256 got, uint256 want);
 
   /// @notice All payments and prizes are in this token.
-  ICurrencyToken public currencyToken;
-
-  /// @notice All revenue is converted to this token and burned (see `burnRevenue`).
-  ERC20Burnable public pixelToken;
+  CurrencyToken public currencyToken;
 
   /// @notice ChainLink VRF consumer.
   VRFConsumer public vrfConsumer;
 
-  /// @notice Uniswap V4 pool manager used to swap currencyToken for pixelToken.
-  IPoolManager public poolManager;
-
-  /// @notice Uniswap V4 pool key identifying the currencyToken / pixelToken pool.
-  PoolKey public swapPoolKey;
+  /// @notice Takes care of swapping and burning the revenue.
+  SwapGateway public swapGateway;
 
   /// @notice List of arenas.
   Arena[] private arenas;
 
-  /// @notice Protocol revenue in USDC.
+  /// @notice Protocol revenue in `currencyToken`.
   uint256 public protocolRevenue;
+
+  /// @notice Numerator of the maximum allowed price slippage during revenue swaps.
+  /// @dev For instance, set the numerator to 1 and the denominator to 100 for a 1% slippage
+  ///   tolerance.
+  uint256 public maxSlippageNumerator;
+
+  /// @notice Denominator of the maximum allowed price slippage during revenue swaps.
+  /// @dev For instance, set the numerator to 1 and the denominator to 100 for a 1% slippage
+  ///   tolerance.
+  uint256 public maxSlippageDenominator;
 
   /// @notice Arena IDs indexed by VRF request ID. Used to retrieve the correct arena in the VRF
   ///   callback.
@@ -145,21 +138,22 @@ contract PixelClash is
     address initialOwner,
     ICurrencyToken currencyToken_,
     ERC20Burnable pixelToken_,
-    address vrfCoordinator,
-    IPoolManager poolManager_,
-    PoolKey memory swapPoolKey_
+    address vrfCoordinator_,
+    ISwapRouter swapRouter_,
+    IUniswapV3Pool swapPool_
   ) public initializer {
     __Ownable_init(initialOwner);
     __Pausable_init();
 
     currencyToken = currencyToken_;
-    pixelToken = pixelToken_;
-    vrfConsumer = new VRFConsumer(vrfCoordinator);
-    poolManager = poolManager_;
-    swapPoolKey = swapPoolKey_;
+    vrfConsumer = new VRFConsumer(vrfCoordinator_);
+    swapGateway = new SwapGateway(currencyToken_, pixelToken_, swapRouter_, swapPool_);
 
     // Skip arena #0 because ID 0 is conventionally invalid.
     arenas.push();
+
+    maxSlippageNumerator = 1;
+    maxSlippageDenominator = 100;
   }
 
   function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
@@ -170,6 +164,19 @@ contract PixelClash is
 
   function unpause() public onlyOwner {
     _unpause();
+  }
+
+  /// @notice Configures the maximum tolerated slippage for protocol revenue swaps.
+  /// @dev For example, setting the `numerator` to 1 and the `denominator` to 100 results in a 1%
+  ///   tolerance.
+  /// @param numerator The numerator part of the maximum slippage tolerance, eg. 1.
+  /// @param denominator The denominator part of the maximum slippage tolerance, eg. 100.
+  function setMaxSlippage(uint256 numerator, uint256 denominator) public onlyOwner {
+    if (maxSlippageDenominator == 0) {
+      revert InvalidArgument();
+    }
+    maxSlippageNumerator = numerator;
+    maxSlippageDenominator = denominator;
   }
 
   function arenaCreationFee() public view returns (uint256) {
@@ -199,46 +206,24 @@ contract PixelClash is
   /// @return An `ArenaData` containing most of the state of the arena.
   function getArenaData(uint256 arenaId) public view returns (ArenaData memory) {
     Arena storage arena = getArenaFromStorage(arenaId);
-    return
-      ArenaData({
-        creationTimestamp: arena.creationTimestamp,
-        owner: arena.owner,
-        teamAName: arena.teamAName,
-        teamALogo: arena.teamALogo,
-        teamALogoCid: arena.teamALogoCid,
-        teamAColor: arena.teamAColor,
-        teamBName: arena.teamBName,
-        teamBLogo: arena.teamBLogo,
-        teamBLogoCid: arena.teamBLogoCid,
-        teamBColor: arena.teamBColor,
-        gridSize: arena.gridSize,
-        pixelFee: arena.pixelFee,
-        maxDuration: arena.maxDuration,
-        state: arena.getState(),
-        teamACount: arena.getTeamACount(),
-        teamBCount: arena.getTeamBCount(),
-        revenue: arena.revenue,
-        balance: arena.balance,
-        vrfRequestId: arena.vrfRequestId,
-        winner: arena.winner
-      });
+    return arena.getData();
   }
 
-  /// @notice Returns the owner of a given pixel.
+  /// @notice Returns the range including the given pixel.
   /// @param arenaId The arena ID.
   /// @param index The zero-based index of the pixel to query. Must be strictly less than the
   ///   `gridSize` of the arena.
-  /// @return player The owner of the pixel, or the zero address if the pixel is in the gap.
+  /// @return range The range including the pixel, or an empty range if the pixel is in the gap. The
+  ///   caller can check whether the pixel is in the gap by checking the `owner` of the range
+  ///   against the zero address, because a regular range will never have the owner set to zero.
   /// @return teamB Whether the pixel has been acquired by team A or B. Ignore this value if the
   ///   pixel is in the gap.
-  /// @return referrer The referrer through which the pixel was purchased, or zero if the pixel
-  ///   wasn't purchased through a referral.
-  function getPixelOwner(
+  function getPixelRange(
     uint256 arenaId,
     uint256 index
-  ) public view returns (address player, bool teamB, address referrer) {
+  ) public view returns (Range memory range, bool teamB) {
     Arena storage arena = getArenaFromStorage(arenaId);
-    return arena.getPixelOwner(index);
+    return arena.getPixelRange(index);
   }
 
   /// @notice Returns the referral revenue generated by a specific referrer.
@@ -281,57 +266,16 @@ contract PixelClash is
     bytes32 r,
     bytes32 s
   ) public whenNotPaused nonReentrant {
-    if (params.gridSize > MAX_GRID_SIZE) {
-      revert GridTooBig(params.gridSize, MAX_GRID_SIZE);
-    }
     address owner = msg.sender;
     uint256 fee = arenaCreationFee();
+    uint256 numPixelsPerTeam = fee / params.pixelFee / 2;
     try currencyToken.permit(owner, address(this), fee, deadline, v, r, s) {} catch {}
     currencyToken.safeTransferFrom(owner, address(this), fee);
-
-    if (
-      (bytes(params.teamAName).length == 0) ||
-      (bytes(params.teamALogo).length == 0) ||
-      (bytes(params.teamBName).length == 0) ||
-      (bytes(params.teamBLogo).length == 0) ||
-      (params.gridSize == 0) ||
-      ((params.gridSize % 2) != 0) ||
-      (params.pixelFee == 0) ||
-      (params.maxDuration == 0)
-    ) {
-      revert InvalidArgument();
-    }
 
     uint256 id = arenas.length;
     arenas.push();
     Arena storage arena = arenas[id];
-    arena.creationTimestamp = block.timestamp;
-    arena.owner = owner;
-    arena.teamAName = params.teamAName;
-    arena.teamALogo = params.teamALogo;
-    arena.teamALogoCid = params.teamALogoCid;
-    arena.teamAColor = params.teamAColor;
-    arena.teamBName = params.teamBName;
-    arena.teamBLogo = params.teamBLogo;
-    arena.teamBLogoCid = params.teamBLogoCid;
-    arena.teamBColor = params.teamBColor;
-    arena.gridSize = params.gridSize;
-    arena.pixelFee = params.pixelFee;
-    arena.maxDuration = params.maxDuration;
-    arena.winner = -1;
-    uint256 numPixelsPerTeam = fee / arena.pixelFee / 2;
-    if (numPixelsPerTeam * 2 >= arena.gridSize) {
-      revert GridTooSmall(arena.gridSize);
-    }
-    arena.teamA.push(
-      Range({owner: owner, offset: 0, length: numPixelsPerTeam, referrer: address(0)})
-    );
-    arena.teamAShares[owner] += numPixelsPerTeam;
-    arena.teamB.push(
-      Range({owner: owner, offset: 0, length: numPixelsPerTeam, referrer: address(0)})
-    );
-    arena.teamBShares[owner] += numPixelsPerTeam;
-
+    arena.initialize(owner, numPixelsPerTeam, params);
     protocolRevenue += fee;
 
     emit CreateArena(owner, id);
@@ -445,55 +389,14 @@ contract PixelClash is
     delete arenaIdsByVrfRequestId[requestId];
 
     (uint256 winner, uint256 revenue) = arena.draw(random);
-    protocolRevenue += revenue;
+    revenue += protocolRevenue;
+    protocolRevenue = 0;
+    currencyToken.forceApprove(address(swapGateway), revenue);
+    try swapGateway.swapAndBurn(revenue, maxSlippageNumerator, maxSlippageDenominator) {} catch {
+      protocolRevenue = revenue;
+    }
 
     emit ArenaClosure(arenaId, requestId, winner);
-  }
-
-  /// @notice Swaps the revenue collected by the protocol so far and burns it.
-  /// @param minPixelAmount The minimum amount of pixel tokens the revenue is swapped for. This
-  ///   protects against sandwich attacks and other cases of high slippage.
-  function burnRevenue(uint256 minPixelAmount) public onlyOwner {
-    uint256 pixelAmount = abi.decode(poolManager.unlock(abi.encode(protocolRevenue)), (uint256));
-    if (pixelAmount < minPixelAmount) {
-      revert SlippageTooHigh(pixelAmount, minPixelAmount);
-    }
-    pixelToken.burn(pixelAmount);
-    protocolRevenue = 0;
-  }
-
-  /// @inheritdoc IUnlockCallback
-  function unlockCallback(bytes calldata data) external returns (bytes memory) {
-    if (msg.sender != address(poolManager)) {
-      revert PermissionDenied();
-    }
-
-    uint256 revenue = abi.decode(data, (uint256));
-    bool zeroForOne = Currency.unwrap(swapPoolKey.currency0) == address(currencyToken);
-
-    BalanceDelta delta = poolManager.swap(
-      swapPoolKey,
-      SwapParams({
-        zeroForOne: zeroForOne,
-        amountSpecified: -int256(revenue),
-        sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
-      }),
-      ""
-    );
-
-    // Settle: sync balance checkpoint, transfer tokens in, then acknowledge.
-    Currency currencyIn = zeroForOne ? swapPoolKey.currency0 : swapPoolKey.currency1;
-    poolManager.sync(currencyIn);
-    currencyToken.safeTransfer(address(poolManager), revenue);
-    poolManager.settle();
-
-    // Take the output tokens from the pool manager.
-    uint256 pixelAmount =
-      zeroForOne ? SafeCast.toUint256(delta.amount1()) : SafeCast.toUint256(delta.amount0());
-    Currency currencyOut = zeroForOne ? swapPoolKey.currency1 : swapPoolKey.currency0;
-    poolManager.take(currencyOut, address(this), pixelAmount);
-
-    return abi.encode(pixelAmount);
   }
 
   /// @notice Returns all prizes for an arena.

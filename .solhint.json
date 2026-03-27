@@ -5,6 +5,18 @@
     "func-visibility": ["warn", { "ignoreConstructors": true }],
     "immutable-vars-naming": "off",
     "import-path-check": ["error", ["[~dependenciesPath]"]],
-    "no-empty-blocks": "off"
+    "no-empty-blocks": "off",
+    "gas-indexed-events": "off",
+    "gas-strict-inequalities": "off",
+    "use-natspec": [
+      "warn",
+      {
+        "title": { "enabled": false },
+        "author": { "enabled": false },
+        "notice": { "enabled": true },
+        "param": { "enabled": true },
+        "return": { "enabled": true }
+      }
+    ]
   }
 }

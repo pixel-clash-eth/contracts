@@ -31,7 +31,7 @@ struct Range {
   uint256 offset;
   /// Length of the range.
   uint256 length;
-  /// The referrer address, or the zero address if the range was purchased without a referrer.
+  /// The referrer address, or the zero address if the range was purchased without a referral.
   address referrer;
 }
 

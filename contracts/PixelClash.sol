@@ -520,6 +520,16 @@ contract PixelClash is
     return arena.getTotalPrizeFor(player);
   }
 
+  /// Returns the prize amount that has already been withdrawn by the player.
+  ///
+  /// @param arenaId The arena ID.
+  /// @return The withdrawn prize amount.
+  function getWithdrawnPrizeAmount(uint256 arenaId) public view returns (uint256) {
+    address player = msg.sender;
+    Arena storage arena = getArenaAndCheckState(arenaId, ARENA_STATE_DRAWN);
+    return arena.withdrawals[player];
+  }
+
   /// Withdraws the prize for the caller from the specified arena, if any.
   ///
   /// The amount returned by `getPrize` for the same arena is transferred to the caller if it hasn't

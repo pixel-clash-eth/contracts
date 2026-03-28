@@ -101,7 +101,7 @@ contract PixelClash is
   error SelfReferralForbidden();
 
   /// @notice All payments and prizes are in this token.
-  CurrencyToken public currencyToken;
+  ICurrencyToken public currencyToken;
 
   /// @notice ChainLink VRF consumer.
   VRFConsumer public vrfConsumer;

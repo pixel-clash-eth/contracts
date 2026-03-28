@@ -4,23 +4,29 @@ import "@nomiclabs/hardhat-solhint";
 import "@openzeppelin/hardhat-upgrades";
 import * as dotenv from "dotenv";
 import "hardhat-gas-reporter";
+import "hardhat-contract-sizer";
 
 dotenv.config();
 
 const config: HardhatUserConfig = {
   solidity: {
-    version: "0.8.28",
-    settings: {
-      optimizer: {
-        enabled: true,
-        runs: 1_000_000,
+    compilers: [
+      {
+        version: "0.8.28",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 1_000_000,
+          },
+          debug: {
+            revertStrings: "strip",
+          },
+          evmVersion: "cancun",
+          viaIR: true,
+        },
       },
-      debug: {
-        revertStrings: "strip",
-      },
-      evmVersion: "cancun",
-      viaIR: true,
-    },
+    ],
+    overrides: {},
   },
   networks: {
     hardhat: {
@@ -48,6 +54,10 @@ const config: HardhatUserConfig = {
     enabled: false,
     currency: "USD",
     L1: "ethereum",
+  },
+  contractSizer: {
+    alphaSort: false,
+    runOnCompile: false,
   },
 };
 

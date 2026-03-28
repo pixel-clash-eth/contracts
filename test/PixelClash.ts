@@ -10,7 +10,8 @@ const CHAIN_LINK_BASE_FEE = 100_000_000_000_000_000n; // 0.1 LINK in juels
 const CHAIN_LINK_GAS_PRICE = 1_000_000_000n; // 1 gwei
 const CHAIN_LINK_WEI_PER_LINK_UNIT = 4_000_000_000_000_000n; // ~0.004 ETH/LINK
 
-const POOL_MANAGER_ADDRESS = "0x000000000004444c5dc75cB358380D2e3dE08A90";
+const SWAP_ROUTER_ADDRESS = "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45";
+const SWAP_POOL_ADDRESS = "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640";
 
 const INVALID_ARENA_ID = 0;
 
@@ -76,12 +77,12 @@ describe("PixelClash", function () {
     process.env.OWNER_ADDRESS = owner.address;
     process.env.CURRENCY_TOKEN = await currencyToken.getAddress();
     process.env.CHAIN_LINK_VRF_WRAPPER = await mockVRFWrapper.getAddress();
-    process.env.UNISWAP_V4_POOL_MANAGER = POOL_MANAGER_ADDRESS;
-    process.env.PIXEL_POOL_FEE = "3000";
-    process.env.PIXEL_POOL_TICK_SPACING = "60";
+    process.env.UNISWAP_V3_SWAP_ROUTER = SWAP_ROUTER_ADDRESS;
+    process.env.UNISWAP_V3_SWAP_POOL = SWAP_POOL_ADDRESS;
 
     const pixelToken = await deployer.deployToken();
     const pixelClash = await deployer.deployPixelClash(pixelToken);
+    const swapGateway = await ethers.getContractAt("SwapGateway", await pixelClash.swapGateway());
     const [controller, governor] = await deployer.deployGovernance(pixelToken, pixelClash);
 
     return {
@@ -91,19 +92,19 @@ describe("PixelClash", function () {
       currencyToken,
       pixelToken,
       pixelClash,
+      swapGateway,
       controller,
       governor,
     };
   }
 
   it("initial state", async function () {
-    const { currencyToken, pixelToken, pixelClash, controller } = await loadFixture(deployFixture);
+    const { currencyToken, pixelToken, pixelClash, swapGateway, controller } =
+      await loadFixture(deployFixture);
     expect(await pixelClash.owner()).to.equal(await controller.getAddress());
     expect(await pixelClash.paused()).to.be.false;
     expect(await pixelClash.currencyToken()).to.equal(await currencyToken.getAddress());
-    expect(await pixelClash.pixelToken()).to.equal(await pixelToken.getAddress());
     expect(await pixelClash.vrfConsumer()).to.not.equal(ethers.ZeroAddress);
-    expect(await pixelClash.poolManager()).to.equal(POOL_MANAGER_ADDRESS);
     expect(await pixelClash.arenaCreationFee()).to.equal(20n * ONE_USDC);
     await expect(pixelClash.getArenaData(INVALID_ARENA_ID)).to.be.revertedWithCustomError(
       pixelClash,
@@ -113,6 +114,10 @@ describe("PixelClash", function () {
       pixelClash,
       "InvalidArenaId",
     );
+    expect(await swapGateway.currencyToken()).to.equal(await currencyToken.getAddress());
+    expect(await swapGateway.pixelToken()).to.equal(await pixelToken.getAddress());
+    expect(await swapGateway.swapRouter()).to.equal(SWAP_ROUTER_ADDRESS);
+    expect(await swapGateway.swapPool()).to.equal(SWAP_POOL_ADDRESS);
   });
 
   it("create arena", async function () {

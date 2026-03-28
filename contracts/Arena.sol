@@ -3,6 +3,9 @@ pragma solidity ^0.8.28;
 
 import {ReferralHeap, ReferralHeapMethods, ReferralRevenue} from "./Heap.sol";
 
+// Maximum arena grid size.
+uint256 constant MAX_GRID_SIZE = 1e19;
+
 // Arena states.
 uint256 constant ARENA_STATE_OPEN = 0;
 uint256 constant ARENA_STATE_FULL = 1;
@@ -20,9 +23,8 @@ uint256 constant TOP_REFERRAL_PRIZE_2 = 3;
 uint256 constant TOP_REFERRAL_PRIZE_3 = 1;
 uint256 constant ARENA_OWNER_PRIZE = 5;
 
-/// A range of pixels in an arena.
-///
-/// `offset+length` must be less than or equal to the grid size of the arena.
+/// @notice A range of pixels in an arena.
+/// @dev `offset+length` must be less than or equal to the grid size of the arena.
 struct Range {
   /// The owner of the range.
   address owner;
@@ -97,9 +99,8 @@ struct Arena {
   mapping(address => uint256) withdrawals;
 }
 
-/// Arena prize breakdown.
-///
-/// Used for data retrieval, both relatively to an individual player and a whole arena.
+/// @notice Arena prize breakdown.
+/// @dev Used for data retrieval, both relatively to an individual player and a whole arena.
 struct Prizes {
   uint256 winnerPrize;
   uint256 teamPrize;
@@ -108,7 +109,7 @@ struct Prizes {
   uint256 arenaOwnerPrize;
 }
 
-/// Contains a subset of `Arena`'s fields. Suitable for data retrieval.
+/// @notice Contains a subset of `Arena`'s state. Suitable for data retrieval.
 struct ArenaData {
   uint256 creationTimestamp;
   address owner;
@@ -132,6 +133,7 @@ struct ArenaData {
   int256 winner;
 }
 
+/// @notice Contains a subset of `Arena`'s fields. Used for arena initialization.
 struct CreateArenaParams {
   string teamAName;
   string teamALogo;
@@ -149,7 +151,62 @@ struct CreateArenaParams {
 library ArenaMethods {
   using ReferralHeapMethods for ReferralHeap;
 
-  /// Returns the number of pixels acquired by team A.
+  error InvalidArgument();
+  error GridTooSmall(uint256 gridSize);
+
+  /// @notice Initializes an arena, reverting if some of the parameters are invalid.
+  /// @param arena The `Arena` instance. Will be overwritten with fresh new state.
+  /// @param owner The owner of the arena.
+  /// @param numPixelsPerTeam The number of pixels initially acquired by the owner in each team.
+  /// @param params A `CreateArenaParams` struct containing information about the initial state.
+  function initialize(
+    Arena storage arena,
+    address owner,
+    uint256 numPixelsPerTeam,
+    CreateArenaParams calldata params
+  ) external {
+    if (
+      (bytes(params.teamAName).length == 0) ||
+      (bytes(params.teamALogo).length == 0) ||
+      (bytes(params.teamBName).length == 0) ||
+      (bytes(params.teamBLogo).length == 0) ||
+      (params.gridSize == 0) ||
+      (params.gridSize > MAX_GRID_SIZE) ||
+      ((params.gridSize % 2) != 0) ||
+      (params.pixelFee == 0) ||
+      (params.maxDuration == 0)
+    ) {
+      revert InvalidArgument();
+    }
+
+    arena.creationTimestamp = block.timestamp;
+    arena.owner = owner;
+    arena.teamAName = params.teamAName;
+    arena.teamALogo = params.teamALogo;
+    arena.teamALogoCid = params.teamALogoCid;
+    arena.teamAColor = params.teamAColor;
+    arena.teamBName = params.teamBName;
+    arena.teamBLogo = params.teamBLogo;
+    arena.teamBLogoCid = params.teamBLogoCid;
+    arena.teamBColor = params.teamBColor;
+    arena.gridSize = params.gridSize;
+    arena.pixelFee = params.pixelFee;
+    arena.maxDuration = params.maxDuration;
+    arena.winner = -1;
+    if (numPixelsPerTeam * 2 >= arena.gridSize) {
+      revert GridTooSmall(arena.gridSize);
+    }
+    arena.teamA.push(
+      Range({owner: owner, offset: 0, length: numPixelsPerTeam, referrer: address(0)})
+    );
+    arena.teamAShares[owner] += numPixelsPerTeam;
+    arena.teamB.push(
+      Range({owner: owner, offset: 0, length: numPixelsPerTeam, referrer: address(0)})
+    );
+    arena.teamBShares[owner] += numPixelsPerTeam;
+  }
+
+  /// @notice Returns the number of pixels acquired by team A.
   function getTeamACount(Arena storage arena) public view returns (uint256) {
     if (arena.teamA.length > 0) {
       Range storage lastRange = arena.teamA[arena.teamA.length - 1];
@@ -159,7 +216,7 @@ library ArenaMethods {
     }
   }
 
-  /// Returns the number of pixels acquired by team B.
+  /// @notice Returns the number of pixels acquired by team B.
   function getTeamBCount(Arena storage arena) public view returns (uint256) {
     if (arena.teamB.length > 0) {
       Range storage lastRange = arena.teamB[arena.teamB.length - 1];
@@ -169,7 +226,7 @@ library ArenaMethods {
     }
   }
 
-  /// Returns the number of pixels still available for purchase (the size of the "gap").
+  /// @notice Returns the number of pixels still available for purchase (the size of the "gap").
   function getAvailablePixels(Arena storage arena) public view returns (uint256) {
     uint256 teamACount = getTeamACount(arena);
     uint256 teamBCount = getTeamBCount(arena);
@@ -193,7 +250,7 @@ library ArenaMethods {
     return arena.winner >= 0;
   }
 
-  /// Returns the current state of the arena. See the `ARENA_STATE_*` constants at the top.
+  /// @notice Returns the current state of the arena. See the `ARENA_STATE_*` constants at the top.
   function getState(Arena storage arena) public view returns (uint256) {
     if (isTimedOut(arena)) {
       if (hasWinner(arena)) {
@@ -216,13 +273,38 @@ library ArenaMethods {
     }
   }
 
-  /// Acquires the given number of pixels.
-  ///
-  /// This function will attempt to acquire `count` pixels, but if less are available in the gap
-  /// range it will only acquire the available ones and return the number of acquired pixels. The
-  /// revenue and balance of the arena will be updated according to the number of effectively
-  /// acquired pixels.
-  ///
+  /// @notice Returns the state of the arena as an `ArenaData` object.
+  function getData(Arena storage arena) public view returns (ArenaData memory) {
+    return
+      ArenaData({
+        creationTimestamp: arena.creationTimestamp,
+        owner: arena.owner,
+        teamAName: arena.teamAName,
+        teamALogo: arena.teamALogo,
+        teamALogoCid: arena.teamALogoCid,
+        teamAColor: arena.teamAColor,
+        teamBName: arena.teamBName,
+        teamBLogo: arena.teamBLogo,
+        teamBLogoCid: arena.teamBLogoCid,
+        teamBColor: arena.teamBColor,
+        gridSize: arena.gridSize,
+        pixelFee: arena.pixelFee,
+        maxDuration: arena.maxDuration,
+        state: getState(arena),
+        teamACount: getTeamACount(arena),
+        teamBCount: getTeamBCount(arena),
+        revenue: arena.revenue,
+        balance: arena.balance,
+        vrfRequestId: arena.vrfRequestId,
+        winner: arena.winner
+      });
+  }
+
+  /// @notice Acquires the given number of pixels.
+  /// @dev This function will attempt to acquire `count` pixels, but if less are available in the
+  ///   gap range it will only acquire the available ones and return the number of acquired pixels.
+  ///   The revenue and balance of the arena will be updated according to the number of effectively
+  ///   acquired pixels.
   /// @param arena The `Arena` instance.
   /// @param player Address of the player acquiring the pixels.
   /// @param count The number of pixels to acquire.
@@ -237,7 +319,7 @@ library ArenaMethods {
     uint256 count,
     bool teamB,
     address referrer
-  ) internal returns (uint256 acquired) {
+  ) external returns (uint256 acquired) {
     assert(player != referrer);
     uint256 teamACount = getTeamACount(arena);
     uint256 teamBCount = getTeamBCount(arena);
@@ -263,20 +345,19 @@ library ArenaMethods {
     }
   }
 
-  /// Returns the owner of a given pixel.
-  ///
+  /// @notice Returns the range including the given pixel.
   /// @param arena The `Arena` instance.
   /// @param index The zero-based index of the pixel to query. Must be strictly less than
   ///   `arena.gridSize`.
-  /// @return owner The owner of the pixel, or the zero address if the pixel is in the gap.
+  /// @return result The range including the pixel, or an empty range if the pixel is in the gap.
+  ///   The caller can check whether the pixel is in the gap by checking the `owner` of the range
+  ///   against the zero address, because a regular range will never have the owner set to zero.
   /// @return teamB Whether the pixel has been acquired by team A or B. Ignore this value if the
   ///   pixel is in the gap.
-  /// @return referrer The referrer through which the pixel was purchased, or zero if the pixel
-  ///   wasn't purchased through a referral.
-  function getPixelOwner(
+  function getPixelRange(
     Arena storage arena,
     uint256 index
-  ) public view returns (address owner, bool teamB, address referrer) {
+  ) public view returns (Range memory result, bool teamB) {
     uint256 teamACount = getTeamACount(arena);
     uint256 teamBCount = getTeamBCount(arena);
     assert(index < arena.gridSize);
@@ -292,7 +373,7 @@ library ArenaMethods {
         } else if (index >= range.offset + range.length) {
           i = k + 1;
         } else {
-          return (range.owner, false, range.referrer);
+          return (range, false);
         }
       }
     } else if (index2 < teamBCount) {
@@ -306,21 +387,19 @@ library ArenaMethods {
         } else if (index2 >= range.offset + range.length) {
           i = k + 1;
         } else {
-          return (range.owner, true, range.referrer);
+          return (range, true);
         }
       }
     } else {
       // index is in the gap
-      return (address(0), false, address(0));
+      return (Range({owner: address(0), offset: 0, length: 0, referrer: address(0)}), false);
     }
     // we should never get here
     assert(false);
   }
 
-  /// Returns the referral revenue generated by a specific referrer.
-  ///
-  /// Returns zero if the specified address hasn't referred any purchase.
-  ///
+  /// @notice Returns the referral revenue generated by a specific referrer.
+  /// @dev Returns zero if the specified address hasn't referred any purchase.
   /// @param arena The `Arena` instance.
   /// @param referrer The queried referrer address.
   /// @return The generated revenue.
@@ -331,24 +410,20 @@ library ArenaMethods {
     return arena.referrals.getRevenueFrom(referrer);
   }
 
-  /// Returns the top three referrers by generated revenue, along with their respective generated
-  /// revenues.
-  ///
-  /// The returned elements are sorted in descending order (ie. the first one is the top referrer,
-  /// the one that generated the most revenue).
-  ///
-  /// Note that less than 3 elements may be returned if an arena has had less than 3 referrers (not
-  /// referrals!) so far. For this function to return at least 3 elements, at least 3 different
-  /// addresses must have successfully referred other players.
-  ///
+  /// @notice Returns the top three referrers by generated revenue, along with their respective
+  ///   generated revenues.
+  /// @dev The returned elements are sorted in descending order (ie. the first one is the top
+  ///   referrer, the one that generated the most revenue).
+  /// @dev Note that less than 3 elements may be returned if an arena has had less than 3 referrers
+  ///   (not referrals!) so far. For this function to return at least 3 elements, at least 3
+  ///   different addresses must have successfully referred other players.
   /// @param arena The `Arena` instance.
   /// @return The 3 referrers.
   function getTop3Referrers(Arena storage arena) public view returns (ReferralRevenue[] memory) {
     return arena.referrals.getTop3();
   }
 
-  /// Picks the arena winner and transitions into the "drawn" state.
-  ///
+  /// @notice Picks the arena winner and transitions into the "drawn" state.
   /// @param arena The `Arena` instance.
   /// @param random The random word returned by the ChainLink VRF.
   /// @return winner The zero-based index of the winner (same as `arena.winner`).
@@ -356,7 +431,7 @@ library ArenaMethods {
   function draw(
     Arena storage arena,
     uint256 random
-  ) internal returns (uint256 winner, uint256 revenue) {
+  ) external returns (uint256 winner, uint256 revenue) {
     assert(getState(arena) == ARENA_STATE_DRAWING);
     uint256 teamACount = getTeamACount(arena);
     uint256 teamBCount = getTeamBCount(arena);
@@ -372,33 +447,34 @@ library ArenaMethods {
     arena.balance -= revenue;
   }
 
-  /// Whether team A won.
+  /// @notice Whether team A won.
   function teamAWins(Arena storage arena) public view returns (bool) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
     uint256 teamACount = getTeamACount(arena);
     return uint256(arena.winner) < teamACount;
   }
 
-  /// Whether team B won.
+  /// @notice Whether team B won.
   function teamBWins(Arena storage arena) public view returns (bool) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
     uint256 teamBCount = getTeamBCount(arena);
     return uint256(arena.winner) >= arena.gridSize - teamBCount;
   }
 
-  /// Returns the prize for the winner (the player owning the winning pixel).
+  /// @notice Returns the prize for the winner (the player owning the winning pixel).
   function getWinnerPrize(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
     return (arena.revenue * WINNER_PRIZE) / 100;
   }
 
-  /// Returns the prize for the team owning the winning pixel.
+  /// @notice Returns the prize for the team owning the winning pixel.
   function getTeamPrize(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
     return (arena.revenue * TEAM_PRIZE) / 100;
   }
 
-  /// Returns the team prize for a given player based on how many pixels they acquired in that team.
+  /// @notice Returns the team prize for a given player based on how many pixels they acquired in
+  ///   that team.
   function getTeamPrizeFor(Arena storage arena, address player) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
     bool teamB = teamBWins(arena);
@@ -418,11 +494,12 @@ library ArenaMethods {
     }
   }
 
-  /// Returns the prize for the referrer of the winner, or zero if the winner had no referrer.
+  /// @notice Returns the prize for the referrer of the winner, or zero if the winner had no
+  ///   referrer.
   function getSponsorPrize(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
-    (, , address referrer) = getPixelOwner(arena, uint256(arena.winner));
-    return getSponsorPrizeImpl(arena, referrer);
+    (Range memory range, ) = getPixelRange(arena, uint256(arena.winner));
+    return getSponsorPrizeImpl(arena, range.referrer);
   }
 
   function getTopReferralPrize1(Arena storage arena) public view returns (uint256) {
@@ -475,14 +552,14 @@ library ArenaMethods {
     return 0;
   }
 
-  /// Returns the prize for the arena owner, which is a fixed percentage of the revenue regardless
-  /// of the winning team.
+  /// @notice Returns the prize for the arena owner, which is a fixed percentage of the revenue
+  ///   regardless of the winning team.
   function getArenaOwnerPrize(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_TIMED_OUT);
     return (arena.revenue * ARENA_OWNER_PRIZE) / 100;
   }
 
-  /// Returns all prizes for the arena.
+  /// @notice Returns all prizes for the arena.
   function getAllPrizes(Arena storage arena) public view returns (Prizes memory) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
     return
@@ -495,7 +572,7 @@ library ArenaMethods {
       });
   }
 
-  /// Returns the sum of all prizes for the arena.
+  /// @notice Returns the sum of all prizes for the arena.
   function getTotalPrizes(Arena storage arena) public view returns (uint256) {
     Prizes memory prizes = getAllPrizes(arena);
     return
@@ -506,21 +583,21 @@ library ArenaMethods {
       prizes.arenaOwnerPrize;
   }
 
-  /// Returns the prizes won by a player in this arena.
+  /// @notice Returns the prizes won by a player in this arena.
   function getPrizesFor(Arena storage arena, address player) public view returns (Prizes memory) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
-    (address winner, , address referrer) = getPixelOwner(arena, uint256(arena.winner));
+    (Range memory range, ) = getPixelRange(arena, uint256(arena.winner));
     return
       Prizes({
-        winnerPrize: (player != winner) ? 0 : getWinnerPrize(arena),
+        winnerPrize: (player != range.owner) ? 0 : getWinnerPrize(arena),
         teamPrize: getTeamPrizeFor(arena, player),
-        sponsorPrize: (player != referrer) ? 0 : getSponsorPrizeImpl(arena, referrer),
+        sponsorPrize: (player != range.referrer) ? 0 : getSponsorPrizeImpl(arena, range.referrer),
         topReferralPrize: getTopReferralPrizeFor(arena, player),
         arenaOwnerPrize: (player != arena.owner) ? 0 : getArenaOwnerPrize(arena)
       });
   }
 
-  /// Returns the sum of all prizes for a given player from this arena.
+  /// @notice Returns the sum of all prizes for a given player from this arena.
   function getTotalPrizeFor(Arena storage arena, address player) public view returns (uint256) {
     Prizes memory prizes = getPrizesFor(arena, player);
     return

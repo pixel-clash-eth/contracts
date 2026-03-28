@@ -55,24 +55,9 @@ export class Deployer {
   public async deployPixelClash(pixelToken: PixelToken): Promise<PixelClash> {
     const currencyTokenAddress = requireEnv("CURRENCY_TOKEN");
     const vrfWrapperAddress = requireEnv("CHAIN_LINK_VRF_WRAPPER");
-    const poolManagerAddress = requireEnv("UNISWAP_V4_POOL_MANAGER");
-    const poolFee = parseInt(requireEnv("PIXEL_POOL_FEE"), 10);
-    const poolTickSpacing = parseInt(requireEnv("PIXEL_POOL_TICK_SPACING"), 10);
+    const swapRouterAddress = requireEnv("UNISWAP_V3_SWAP_ROUTER");
+    const swapPoolAddress = requireEnv("UNISWAP_V3_SWAP_POOL");
     const pixelTokenAddress = await pixelToken.getAddress();
-
-    const swapPoolKey = {
-      currency0:
-        currencyTokenAddress.toLowerCase() < pixelTokenAddress.toLowerCase()
-          ? currencyTokenAddress
-          : pixelTokenAddress,
-      currency1:
-        currencyTokenAddress.toLowerCase() > pixelTokenAddress.toLowerCase()
-          ? currencyTokenAddress
-          : pixelTokenAddress,
-      fee: poolFee,
-      tickSpacing: poolTickSpacing,
-      hooks: ethers.ZeroAddress,
-    };
 
     const arenaMethods = await this.deploy("ArenaMethods");
     const arenaMethodsAddress = await arenaMethods.getAddress();
@@ -90,8 +75,8 @@ export class Deployer {
         currencyTokenAddress,
         pixelTokenAddress,
         vrfWrapperAddress,
-        poolManagerAddress,
-        swapPoolKey,
+        swapRouterAddress,
+        swapPoolAddress,
       ],
       {
         kind: "uups",

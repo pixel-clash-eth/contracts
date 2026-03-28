@@ -22,6 +22,6 @@ contract MockToken is ERC20, ERC20Burnable, Ownable, ERC20Permit {
   }
 
   function mint(uint256 amount) public {
-    _mint(_msgSender(), amount);
+    _mint(msg.sender, amount);
   }
 }

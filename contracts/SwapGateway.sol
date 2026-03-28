@@ -81,7 +81,7 @@ contract SwapGateway is Ownable {
     inputToken.safeTransferFrom(msg.sender, address(this), amount);
     inputToken.forceApprove(address(swapRouter), amount);
 
-    uint256 pixelAmount;
+    uint256 outputAmount;
     try
       swapRouter.exactInputSingle(
         ISwapRouter.ExactInputSingleParams({
@@ -100,16 +100,16 @@ contract SwapGateway is Ownable {
         })
       )
     returns (uint256 swappedAmount) {
-      pixelAmount = swappedAmount;
+      outputAmount = swappedAmount;
     } catch {
       inputToken.safeTransfer(msg.sender, amount);
       revert SwapFailure();
     }
-    targetToken.burn(pixelAmount);
+    targetToken.burn(outputAmount);
   }
 
-  /// @notice Computes the minimum acceptable pixel output for `amountIn` of inputToken, based on
-  ///   a 30-minute TWAP from the V3 pool with the specified max slippage applied.
+  /// @notice Computes the minimum acceptable output for `amountIn` of inputToken, based on a
+  ///   30-minute TWAP from the V3 pool with the specified max slippage applied.
   /// @param amountIn The `inputToken` amount to swap.
   /// @return The minimum acceptable amount of output tokens.
   function _computeTwapMinAmount(
@@ -137,14 +137,14 @@ contract SwapGateway is Ownable {
     // sqrtPriceX96 = sqrt(token1 / token0) * 2^96
     uint256 twapAmount;
     if (swapPool.token0() == address(inputToken)) {
-      // pixelAmount = amountIn * sqrtPriceX96^2 / 2^192
+      // twapAmount = amountIn * sqrtPriceX96^2 / 2^192
       twapAmount = FullMath.mulDiv(
         FullMath.mulDiv(amountIn, uint256(sqrtPriceX96), 2 ** 96),
         uint256(sqrtPriceX96),
         2 ** 96
       );
     } else {
-      // pixelAmount = amountIn * 2^192 / sqrtPriceX96^2
+      // twapAmount = amountIn * 2^192 / sqrtPriceX96^2
       twapAmount = FullMath.mulDiv(
         FullMath.mulDiv(amountIn, 2 ** 96, uint256(sqrtPriceX96)),
         2 ** 96,

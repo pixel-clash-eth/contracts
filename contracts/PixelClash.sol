@@ -40,6 +40,8 @@ uint256 constant ARENA_CREATION_FEE = 2000;
 // ChainLink VRF callback gas limit.
 uint32 constant VRF_CALLBACK_GAS_LIMIT = 1_000_000;
 
+/// @notice Represents a generic ERC-20 token with ERC-2612 permits.
+/// @dev We use this type of token as currency for all payments and prizes in the game.
 interface ICurrencyToken is IERC20, IERC20Metadata, IERC20Permit {}
 
 contract PixelClash is

@@ -111,6 +111,8 @@ contract SwapGateway is Ownable {
   /// @notice Computes the minimum acceptable output for `amountIn` of inputToken, based on a
   ///   30-minute TWAP from the V3 pool with the specified max slippage applied.
   /// @param amountIn The `inputToken` amount to swap.
+  /// @param maxSlippageNumerator The numerator part of the maximum slippage tolerance, eg. 1.
+  /// @param maxSlippageDenominator The denominator part of the maximum slippage tolerance, eg. 100.
   /// @return The minimum acceptable amount of output tokens.
   function _computeTwapMinAmount(
     uint256 amountIn,
@@ -128,7 +130,7 @@ contract SwapGateway is Ownable {
     int24 twapTick = int24(delta / int56(uint56(twapInterval)));
     // Round toward negative infinity when there is a remainder.
     if (delta < 0 && delta % int56(uint56(twapInterval)) != 0) {
-      twapTick--;
+      --twapTick;
     }
 
     uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(twapTick);

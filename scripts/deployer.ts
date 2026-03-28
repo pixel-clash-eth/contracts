@@ -55,8 +55,8 @@ export class Deployer {
   public async deployPixelClash(pixelToken: PixelToken): Promise<PixelClash> {
     const currencyTokenAddress = requireEnv("CURRENCY_TOKEN");
     const vrfWrapperAddress = requireEnv("CHAIN_LINK_VRF_WRAPPER");
-    const swapRouterAddress = requireEnv("UNISWAP_V3_SWAP_ROUTER");
-    const swapPoolAddress = requireEnv("UNISWAP_V3_SWAP_POOL");
+    const swapRouterAddress = requireEnv("UNISWAP_V3_ROUTER");
+    const swapPoolAddress = requireEnv("UNISWAP_V3_POOL");
     const pixelTokenAddress = await pixelToken.getAddress();
 
     const arenaMethods = await this.deploy("ArenaMethods");

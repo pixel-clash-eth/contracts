@@ -8,15 +8,8 @@ async function main() {
   console.log(`Deployer: ${await deployer.getAddress()}`);
   console.log(`Owner:    ${ownerAddress}`);
 
-  const pixelToken = await deployer.deployToken();
-  const pixelClash = await deployer.deployPixelClash(pixelToken);
-  const [controller, governor] = await deployer.deployGovernance(pixelToken, pixelClash);
-
-  console.log("\nDeployment complete:");
-  console.log(`  PixelToken:      ${await pixelToken.getAddress()}`);
-  console.log(`  PixelClash:      ${await pixelClash.getAddress()}`);
-  console.log(`  PixelController: ${await controller.getAddress()}`);
-  console.log(`  PixelGovernor:   ${await governor.getAddress()}`);
+  const pixelClash = await deployer.deployPixelClash();
+  console.log(`Deployed successfully at ${await pixelClash.getAddress()}`);
 }
 
 main().catch((e) => {

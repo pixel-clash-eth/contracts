@@ -27,7 +27,7 @@ const ARENA_STATE_DRAWN = 4;
 
 describe("PixelClash", function () {
   async function deployFixture() {
-    const [, owner] = await ethers.getSigners();
+    const [owner] = await ethers.getSigners();
     const deployer = await Deployer.create();
 
     const currencyToken = await deployer.deploy<MockToken>(
@@ -35,6 +35,8 @@ describe("PixelClash", function () {
       /*decimals=*/ 6,
       owner.address,
     );
+
+    const pixelToken = await ethers.getContractAt("ERC20Burnable", process.env.PIXEL_TOKEN!);
 
     const mockVRFCoordinator = await deployer.deploy<MockVRFCoordinator>(
       "MockVRFCoordinator",
@@ -78,10 +80,8 @@ describe("PixelClash", function () {
     process.env.CHAIN_LINK_VRF_WRAPPER = await mockVRFWrapper.getAddress();
     process.env.UNISWAP_V3_POOL = UNISWAP_V3_POOL;
 
-    const pixelToken = await deployer.deployToken();
-    const pixelClash = await deployer.deployPixelClash(pixelToken);
+    const pixelClash = await deployer.deployPixelClash();
     const swapGateway = await ethers.getContractAt("SwapGateway", await pixelClash.swapGateway());
-    const [controller, governor] = await deployer.deployGovernance(pixelToken, pixelClash);
 
     return {
       owner,
@@ -91,15 +91,13 @@ describe("PixelClash", function () {
       pixelToken,
       pixelClash,
       swapGateway,
-      controller,
-      governor,
     };
   }
 
   it("initial state", async function () {
-    const { currencyToken, pixelToken, pixelClash, swapGateway, controller } =
+    const { owner, currencyToken, pixelToken, pixelClash, swapGateway } =
       await loadFixture(deployFixture);
-    expect(await pixelClash.owner()).to.equal(await controller.getAddress());
+    expect(await pixelClash.owner()).to.equal(await owner.getAddress());
     expect(await pixelClash.paused()).to.be.false;
     expect(await pixelClash.currencyToken()).to.equal(await currencyToken.getAddress());
     expect(await pixelClash.vrfConsumer()).to.not.equal(ethers.ZeroAddress);

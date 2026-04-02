@@ -422,4 +422,74 @@ describe("PixelClash", function () {
 
     expect(await pixelClash.protocolRevenue()).to.equal(ARENA_CREATION_FEE);
   });
+
+  it("purchase all remaining pixels in team A", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const { player1: player, currencyToken, pixelClash } = fixture;
+    const arenaId = 1;
+    const pixelFee = ONE_USDC;
+    const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / pixelFee / 2n;
+    const pixelsAlreadyFilled = numPixelsPerTeamFromCreation * 2n;
+    const gridSize = BigInt(STANDARD_GRID_SIZE);
+    const remainingPixels = gridSize - pixelsAlreadyFilled;
+    const totalCost = pixelFee * remainingPixels;
+
+    await currencyToken.connect(player).mint(totalCost);
+    await currencyToken.connect(player).approve(await pixelClash.getAddress(), totalCost);
+
+    await fixture.purchasePixels(
+      player,
+      arenaId,
+      /*teamB=*/ false,
+      remainingPixels,
+      /*referrer=*/ null,
+    );
+
+    expect(await currencyToken.balanceOf(await player.getAddress())).to.equal(0n);
+
+    const arenaData = await pixelClash.getArenaData(arenaId);
+    expect(arenaData.state).to.equal(ARENA_STATE_FULL);
+    expect(arenaData.teamACount).to.equal(numPixelsPerTeamFromCreation + remainingPixels);
+    expect(arenaData.teamBCount).to.equal(numPixelsPerTeamFromCreation);
+    expect(arenaData.teamACount + arenaData.teamBCount).to.equal(gridSize);
+    expect(arenaData.revenue).to.equal(totalCost);
+    expect(arenaData.balance).to.equal(totalCost);
+  });
+
+  it("purchase all remaining pixels in team B", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const { player1: player, currencyToken, pixelClash } = fixture;
+    const arenaId = 1;
+    const pixelFee = ONE_USDC;
+    const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / pixelFee / 2n;
+    const pixelsAlreadyFilled = numPixelsPerTeamFromCreation * 2n;
+    const gridSize = BigInt(STANDARD_GRID_SIZE);
+    const remainingPixels = gridSize - pixelsAlreadyFilled;
+    const totalCost = pixelFee * remainingPixels;
+
+    await currencyToken.connect(player).mint(totalCost);
+    await currencyToken.connect(player).approve(await pixelClash.getAddress(), totalCost);
+
+    await fixture.purchasePixels(
+      player,
+      arenaId,
+      /*teamB=*/ true,
+      remainingPixels,
+      /*referrer=*/ null,
+    );
+
+    expect(await currencyToken.balanceOf(await player.getAddress())).to.equal(0n);
+
+    const arenaData = await pixelClash.getArenaData(arenaId);
+    expect(arenaData.state).to.equal(ARENA_STATE_FULL);
+    expect(arenaData.teamACount).to.equal(numPixelsPerTeamFromCreation);
+    expect(arenaData.teamBCount).to.equal(numPixelsPerTeamFromCreation + remainingPixels);
+    expect(arenaData.teamACount + arenaData.teamBCount).to.equal(gridSize);
+    expect(arenaData.revenue).to.equal(totalCost);
+    expect(arenaData.balance).to.equal(totalCost);
+  });
 });

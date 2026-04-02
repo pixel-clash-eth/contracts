@@ -290,6 +290,10 @@ describe("PixelClash", function () {
     expect(await currencyToken.balanceOf(await player.getAddress())).to.equal(0n);
 
     const arenaData = await pixelClash.getArenaData(arenaId);
+    expect(arenaData.state).to.equal(ARENA_STATE_OPEN);
+    expect(arenaData.revenue).to.equal(ONE_USDC);
+    expect(arenaData.balance).to.equal(ONE_USDC);
+
     const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / ONE_USDC / 2n;
     expect(arenaData.teamACount).to.equal(numPixelsPerTeamFromCreation + 1n);
     expect(arenaData.teamBCount).to.equal(numPixelsPerTeamFromCreation);
@@ -311,6 +315,10 @@ describe("PixelClash", function () {
     expect(await currencyToken.balanceOf(await player.getAddress())).to.equal(0n);
 
     const arenaData = await pixelClash.getArenaData(arenaId);
+    expect(arenaData.state).to.equal(ARENA_STATE_OPEN);
+    expect(arenaData.revenue).to.equal(ONE_USDC);
+    expect(arenaData.balance).to.equal(ONE_USDC);
+
     const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / ONE_USDC / 2n;
     expect(arenaData.teamACount).to.equal(numPixelsPerTeamFromCreation);
     expect(arenaData.teamBCount).to.equal(numPixelsPerTeamFromCreation + 1n);
@@ -332,6 +340,10 @@ describe("PixelClash", function () {
     expect(await currencyToken.balanceOf(await player.getAddress())).to.equal(0n);
 
     const arenaData = await pixelClash.getArenaData(arenaId);
+    expect(arenaData.state).to.equal(ARENA_STATE_OPEN);
+    expect(arenaData.revenue).to.equal(ONE_USDC * 2n);
+    expect(arenaData.balance).to.equal(ONE_USDC * 2n);
+
     const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / ONE_USDC / 2n;
     expect(arenaData.teamACount).to.equal(numPixelsPerTeamFromCreation + 2n);
     expect(arenaData.teamBCount).to.equal(numPixelsPerTeamFromCreation);
@@ -353,6 +365,10 @@ describe("PixelClash", function () {
     expect(await currencyToken.balanceOf(await player.getAddress())).to.equal(0n);
 
     const arenaData = await pixelClash.getArenaData(arenaId);
+    expect(arenaData.state).to.equal(ARENA_STATE_OPEN);
+    expect(arenaData.revenue).to.equal(ONE_USDC * 2n);
+    expect(arenaData.balance).to.equal(ONE_USDC * 2n);
+
     const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / ONE_USDC / 2n;
     expect(arenaData.teamACount).to.equal(numPixelsPerTeamFromCreation);
     expect(arenaData.teamBCount).to.equal(numPixelsPerTeamFromCreation + 2n);
@@ -396,6 +412,10 @@ describe("PixelClash", function () {
     expect(await currencyToken.balanceOf(await player2.getAddress())).to.equal(0n);
 
     const arenaData = await pixelClash.getArenaData(arenaId);
+    expect(arenaData.state).to.equal(ARENA_STATE_OPEN);
+    expect(arenaData.revenue).to.equal(ONE_USDC * 46n);
+    expect(arenaData.balance).to.equal(ONE_USDC * 46n);
+
     const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / ONE_USDC / 2n;
     expect(arenaData.teamACount).to.equal(numPixelsPerTeamFromCreation + player1PixelCount);
     expect(arenaData.teamBCount).to.equal(numPixelsPerTeamFromCreation + player2PixelCount);

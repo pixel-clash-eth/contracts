@@ -1,7 +1,7 @@
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { type Signer } from "ethers";
+import type { BigNumberish, Signer } from "ethers";
 
 import { Deployer } from "../scripts/deployer";
 
@@ -191,7 +191,7 @@ class Fixture {
     player: Signer,
     arenaId: number,
     teamB: boolean,
-    count: number,
+    count: BigNumberish,
     referral: Signer | null,
   ): Promise<void> {
     await this._pixelClash
@@ -356,6 +356,49 @@ describe("PixelClash", function () {
     const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / ONE_USDC / 2n;
     expect(arenaData.teamACount).to.equal(numPixelsPerTeamFromCreation);
     expect(arenaData.teamBCount).to.equal(numPixelsPerTeamFromCreation + 2n);
+
+    expect(await pixelClash.protocolRevenue()).to.equal(ARENA_CREATION_FEE);
+  });
+
+  it("player1 purchases from team A and player2 from team B", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const { player1, player2, currencyToken, pixelClash } = fixture;
+    const arenaId = 1;
+    const player1PixelCount = 12n;
+    const player2PixelCount = 34n;
+    const player1Cost = ONE_USDC * player1PixelCount;
+    const player2Cost = ONE_USDC * player2PixelCount;
+
+    await currencyToken.connect(player1).mint(player1Cost);
+    await currencyToken.connect(player1).approve(await pixelClash.getAddress(), player1Cost);
+
+    await currencyToken.connect(player2).mint(player2Cost);
+    await currencyToken.connect(player2).approve(await pixelClash.getAddress(), player2Cost);
+
+    await fixture.purchasePixels(
+      player1,
+      arenaId,
+      /*teamB=*/ false,
+      player1PixelCount,
+      /*referrer=*/ null,
+    );
+    await fixture.purchasePixels(
+      player2,
+      arenaId,
+      /*teamB=*/ true,
+      player2PixelCount,
+      /*referrer=*/ null,
+    );
+
+    expect(await currencyToken.balanceOf(await player1.getAddress())).to.equal(0n);
+    expect(await currencyToken.balanceOf(await player2.getAddress())).to.equal(0n);
+
+    const arenaData = await pixelClash.getArenaData(arenaId);
+    const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / ONE_USDC / 2n;
+    expect(arenaData.teamACount).to.equal(numPixelsPerTeamFromCreation + player1PixelCount);
+    expect(arenaData.teamBCount).to.equal(numPixelsPerTeamFromCreation + player2PixelCount);
 
     expect(await pixelClash.protocolRevenue()).to.equal(ARENA_CREATION_FEE);
   });

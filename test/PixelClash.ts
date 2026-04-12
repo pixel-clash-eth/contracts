@@ -270,7 +270,12 @@ class Fixture {
 describe("PixelClash", function () {
   it("initial state", async function () {
     const { owner, currencyToken, pixelToken, pixelClash, swapGateway } = await Fixture.load();
-    expect(await pixelClash.owner()).to.equal(await owner.getAddress());
+    const ownerAddress = await owner.getAddress();
+    expect(await pixelClash.hasRole(await pixelClash.DEFAULT_ADMIN_ROLE(), ownerAddress)).to.be
+      .true;
+    expect(await pixelClash.hasRole(await pixelClash.UPGRADE_ROLE(), ownerAddress)).to.be.true;
+    expect(await pixelClash.hasRole(await pixelClash.PAUSE_ROLE(), ownerAddress)).to.be.true;
+    expect(await pixelClash.hasRole(await pixelClash.CONFIG_ROLE(), ownerAddress)).to.be.true;
     expect(await pixelClash.paused()).to.be.false;
     expect(await pixelClash.currencyToken()).to.equal(await currencyToken.getAddress());
     expect(await pixelClash.vrfConsumer()).to.not.equal(ethers.ZeroAddress);

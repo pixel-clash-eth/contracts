@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.28;
 
-import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
@@ -52,12 +52,16 @@ interface ICurrencyToken is IERC20, IERC20Metadata, IERC20Permit {}
 
 contract PixelClash is
   Initializable,
-  OwnableUpgradeable,
+  AccessControlUpgradeable,
   PausableUpgradeable,
   ReentrancyGuardTransient,
   UUPSUpgradeable,
   VRFClient
 {
+  bytes32 public constant UPGRADE_ROLE = keccak256("UPGRADE_ROLE");
+  bytes32 public constant PAUSE_ROLE = keccak256("PAUSE_ROLE");
+  bytes32 public constant CONFIG_ROLE = keccak256("CONFIG_ROLE");
+
   using Address for address payable;
   using SafeERC20 for ICurrencyToken;
   using ArenaMethods for Arena;
@@ -143,13 +147,18 @@ contract PixelClash is
   }
 
   function initialize(
-    address initialOwner,
+    address defaultAdmin,
     ICurrencyToken currencyToken_,
     address vrfCoordinator_,
     SwapGateway swapGateway_
   ) public initializer {
-    __Ownable_init(initialOwner);
+    __AccessControl_init();
     __Pausable_init();
+
+    _grantRole(DEFAULT_ADMIN_ROLE, defaultAdmin);
+    _grantRole(UPGRADE_ROLE, defaultAdmin);
+    _grantRole(PAUSE_ROLE, defaultAdmin);
+    _grantRole(CONFIG_ROLE, defaultAdmin);
 
     currencyToken = currencyToken_;
     vrfConsumer = new VRFConsumer(vrfCoordinator_);
@@ -162,13 +171,13 @@ contract PixelClash is
     maxSlippageDenominator = 100;
   }
 
-  function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+  function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADE_ROLE) {}
 
-  function pause() public onlyOwner {
+  function pause() public onlyRole(PAUSE_ROLE) {
     _pause();
   }
 
-  function unpause() public onlyOwner {
+  function unpause() public onlyRole(PAUSE_ROLE) {
     _unpause();
   }
 
@@ -177,7 +186,7 @@ contract PixelClash is
   ///   tolerance.
   /// @param numerator The numerator part of the maximum slippage tolerance, eg. 1.
   /// @param denominator The denominator part of the maximum slippage tolerance, eg. 100.
-  function setMaxSlippage(uint256 numerator, uint256 denominator) public onlyOwner {
+  function setMaxSlippage(uint256 numerator, uint256 denominator) public onlyRole(CONFIG_ROLE) {
     if (denominator == 0 || numerator >= denominator) {
       revert InvalidArgument();
     }

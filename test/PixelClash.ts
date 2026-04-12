@@ -1,4 +1,4 @@
-import { loadFixture, mine } from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import { loadFixture, mine, time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import type { BigNumberish, Signer } from "ethers";
@@ -11,6 +11,7 @@ import type {
   MockVRFCoordinator,
   MockVRFWrapper,
   PixelClash,
+  PoolCreatorHelper,
   SwapGateway,
 } from "../typechain-types";
 
@@ -18,7 +19,9 @@ const CHAIN_LINK_BASE_FEE = 100_000_000_000_000_000n; // 0.1 LINK in juels
 const CHAIN_LINK_GAS_PRICE = 1_000_000_000n; // 1 gwei
 const CHAIN_LINK_WEI_PER_LINK_UNIT = 4_000_000_000_000_000n; // ~0.004 ETH/LINK
 
-const UNISWAP_V3_POOL = "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640";
+// Liquidity seeded into the MockToken / PIXEL_TOKEN pool (same wei amount for both tokens).
+// At the 1:1 initialisation price (tick 0) this is more than enough to cover test revenue amounts.
+const POOL_LIQUIDITY = 10n ** 18n;
 
 const INVALID_ARENA_ID = 0;
 
@@ -45,7 +48,11 @@ class Fixture {
       owner.address,
     );
 
-    const pixelToken = await ethers.getContractAt("ERC20Burnable", process.env.PIXEL_TOKEN!);
+    const pixelToken = await deployer.deploy<MockToken>(
+      "MockToken",
+      /*decimals=*/ 18,
+      owner.address,
+    );
 
     const mockVrfCoordinator = await deployer.deploy<MockVRFCoordinator>(
       "MockVRFCoordinator",
@@ -100,10 +107,43 @@ class Fixture {
       /*fulfillmentFlatFeeLinkDiscountPPM=*/ 100_000,
     );
 
+    // ── Create Uniswap V3 pool (currencyToken ↔ pixelToken, 0.05 % fee tier) ──
+    const currencyTokenAddress = await currencyToken.getAddress();
+    const pixelTokenAddress = await pixelToken.getAddress();
+
+    await currencyToken.connect(owner).mint(POOL_LIQUIDITY);
+    await pixelToken.connect(owner).mint(POOL_LIQUIDITY);
+
+    const poolHelper = await deployer.deploy<PoolCreatorHelper>(
+      "PoolCreatorHelper",
+      process.env.UNISWAP_V3_FACTORY!,
+      process.env.UNISWAP_V3_POSITION_MANAGER!,
+    );
+    await currencyToken.connect(owner).approve(await poolHelper.getAddress(), POOL_LIQUIDITY);
+    await pixelToken.connect(owner).approve(await poolHelper.getAddress(), POOL_LIQUIDITY);
+    await poolHelper
+      .connect(owner)
+      .createAndSeed(currencyTokenAddress, pixelTokenAddress, POOL_LIQUIDITY);
+
+    const uniswapFactory = new ethers.Contract(
+      process.env.UNISWAP_V3_FACTORY!,
+      ["function getPool(address,address,uint24) view returns (address)"],
+      ethers.provider,
+    );
+    const poolAddress: string = await uniswapFactory.getPool(
+      currencyTokenAddress,
+      pixelTokenAddress,
+      500,
+    );
+
+    // Fast-forward 30 min + 1 s so SwapGateway's pool.observe([1800, 0]) has enough history.
+    await time.increase(1801);
+
     process.env.OWNER_ADDRESS = owner.address;
-    process.env.CURRENCY_TOKEN = await currencyToken.getAddress();
+    process.env.CURRENCY_TOKEN = currencyTokenAddress;
+    process.env.PIXEL_TOKEN = pixelTokenAddress;
     process.env.CHAIN_LINK_VRF_WRAPPER = await mockVRFWrapper.getAddress();
-    process.env.UNISWAP_V3_POOL = UNISWAP_V3_POOL;
+    process.env.UNISWAP_V3_POOL = poolAddress;
 
     const pixelClash = await deployer.deployPixelClash();
     const swapGateway = await ethers.getContractAt("SwapGateway", await pixelClash.swapGateway());
@@ -244,7 +284,7 @@ describe("PixelClash", function () {
     expect(await swapGateway.inputToken()).to.equal(await currencyToken.getAddress());
     expect(await swapGateway.targetToken()).to.equal(await pixelToken.getAddress());
     expect(await swapGateway.swapRouter()).to.equal(process.env.UNISWAP_V3_ROUTER);
-    expect(await swapGateway.swapPool()).to.equal(UNISWAP_V3_POOL);
+    expect(await swapGateway.swapPool()).to.equal(process.env.UNISWAP_V3_POOL);
   });
 
   it("create arena", async function () {
@@ -700,7 +740,16 @@ describe("PixelClash", function () {
     const fixture = await Fixture.load();
     await fixture.createTestArena();
 
-    const { creator, player1, player2, currencyToken, pixelClash, mockVrfCoordinator } = fixture;
+    const {
+      creator,
+      player1,
+      player2,
+      currencyToken,
+      pixelToken,
+      pixelClash,
+      mockVrfCoordinator,
+      swapGateway,
+    } = fixture;
     const arenaId = 1;
     const pixelFee = ONE_USDC;
     const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / pixelFee / 2n;
@@ -767,6 +816,11 @@ describe("PixelClash", function () {
 
     // ── Mine 10 blocks (VRF_REQUEST_CONFIRMATIONS) ───────────────────────────
     await mine(10);
+
+    // ── Snapshot balances before the draw triggers swap&burn ─────────────────
+    const poolAddress = await swapGateway.swapPool();
+    const pixelSupplyBefore = await pixelToken.totalSupply();
+    const poolCurrencyBalanceBefore = await currencyToken.balanceOf(poolAddress);
 
     // ── Simulate the ChainLink VRF response ──────────────────────────────────
     // random = 0 → winner = pixel 0 (team A, owned by creator) → team A wins.
@@ -872,12 +926,27 @@ describe("PixelClash", function () {
     // team prizes must add up to expectedTeamPrize (modulo integer division rounding)
     expect(creatorExpectedTeamPrize + player1ExpectedTeamPrize).to.be.lte(expectedTeamPrize);
 
-    // ── Protocol revenue ──────────────────────────────────────────────────────
-    // swapAndBurn reverts (no real Uniswap in tests), so protocolRevenue absorbs:
-    //   - ARENA_CREATION_FEE (from createArena)
-    //   - arena protocol fee (5% of totalRevenue that isn't covered by WINNER+TEAM+OWNER with no referrers)
-    expect(await pixelClash.protocolRevenue()).to.equal(
-      ARENA_CREATION_FEE + expectedArenaProtocolFee,
+    // ── Swap & burn ───────────────────────────────────────────────────────────
+    const swappedAmount = ARENA_CREATION_FEE + expectedArenaProtocolFee;
+
+    // protocolRevenue is zeroed on a successful swap — nothing stranded in PixelClash.
+    expect(await pixelClash.protocolRevenue()).to.equal(0n);
+
+    // Only prize money remains in PixelClash; the protocol cut was transferred to the pool.
+    expect(await currencyToken.balanceOf(await pixelClash.getAddress())).to.equal(
+      expectedTotalPrizes,
     );
+
+    // The full protocol cut landed in the Uniswap pool.
+    expect(await currencyToken.balanceOf(poolAddress)).to.equal(
+      poolCurrencyBalanceBefore + swappedAmount,
+    );
+
+    // The pixel tokens received from the swap were burned.
+    // At tick 0 (1:1 wei price, 0.05 % pool fee, 1 % max slippage), the burned amount is bounded
+    // between swappedAmount × 0.9895 and swappedAmount.
+    const burnedPixels = pixelSupplyBefore - (await pixelToken.totalSupply());
+    expect(burnedPixels).to.be.gte((swappedAmount * 9895n) / 10000n);
+    expect(burnedPixels).to.be.lte(swappedAmount);
   });
 });

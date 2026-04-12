@@ -84,6 +84,8 @@ export class Deployer {
     );
     await pixelClash.waitForDeployment();
 
+    await swapGateway.transferOwnership(await pixelClash.getAddress());
+
     console.log(`PixelClash:    ${await pixelClash.getAddress()}`);
     return pixelClash;
   }

@@ -2,9 +2,9 @@
 pragma solidity ^0.8.28;
 
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
-import {UUPSUpgradeable} from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
@@ -174,7 +174,7 @@ contract PixelClash is
   /// @param numerator The numerator part of the maximum slippage tolerance, eg. 1.
   /// @param denominator The denominator part of the maximum slippage tolerance, eg. 100.
   function setMaxSlippage(uint256 numerator, uint256 denominator) public onlyOwner {
-    if (maxSlippageDenominator == 0) {
+    if (denominator == 0 || numerator >= denominator) {
       revert InvalidArgument();
     }
     maxSlippageNumerator = numerator;
@@ -344,6 +344,8 @@ contract PixelClash is
   }
 
   /// @notice Triggers the final drawing for an arena.
+  /// @dev This function is permissionless, meaning that anyone can trigger the drawing of a
+  ///   drawable arena, not just the arena owner.
   /// @dev This function call must be funded with at least the ETH value specified by
   ///   `getDrawPrice`. However, to account for slippage, it is best to fund it with a slightly
   ///   higher amount, eg. 110% of what's returned by `getDrawPrice()`. The function will

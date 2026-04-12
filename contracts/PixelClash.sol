@@ -33,14 +33,21 @@ import {
 import {ReferralRevenue} from "./Heap.sol";
 import {VRFClient, VRFConsumer} from "./VRFConsumer.sol";
 
-// Arena creation fee in USD cents. Currently $20.
-uint256 constant ARENA_CREATION_FEE = 2000;
+// Base fee for arena creation in USD cents. Currently $25.
+uint256 constant BASE_ARENA_CREATION_FEE = 2500;
+
+// Pixels that are always assigned to the arena owner upon creation.
+//
+// NOTE: This number must be divisible by 2 because half of these are assigned from team A and half
+// from team B.
+uint256 constant INITIAL_PIXELS = 10;
 
 // ChainLink VRF callback gas limit.
 uint32 constant VRF_CALLBACK_GAS_LIMIT = 1_000_000;
 
-/// @notice Represents a generic ERC-20 token with ERC-2612 permits.
-/// @dev We use this type of token as currency for all payments and prizes in the game.
+// Represents a generic ERC-20 token with ERC-2612 permits.
+//
+// We use this type of token as currency for all payments and prizes in the game.
 interface ICurrencyToken is IERC20, IERC20Metadata, IERC20Permit {}
 
 contract PixelClash is
@@ -178,8 +185,10 @@ contract PixelClash is
     maxSlippageDenominator = denominator;
   }
 
-  function arenaCreationFee() public view returns (uint256) {
-    return (ARENA_CREATION_FEE * (10 ** currencyToken.decimals())) / 100;
+  function arenaCreationFee(uint256 pixelFee) public view returns (uint256) {
+    return
+      pixelFee * INITIAL_PIXELS +
+      (BASE_ARENA_CREATION_FEE * (10 ** currencyToken.decimals())) / 100;
   }
 
   function getArenaFromStorage(uint256 id) private view returns (Arena storage arena) {
@@ -251,8 +260,10 @@ contract PixelClash is
   }
 
   /// @notice Creates a new pixel arena.
-  /// @dev Payment of a fee equal to `ARENA_CREATION_FEE` is required. The payment is carried out
-  ///   via an ERC-2612 signature.
+  /// @dev Payment of a fee equal to `ARENA_CREATION_FEE` plus the cost of `INITIAL_PIXELS` is
+  ///   required. The creator of the arena automatically becomes the owner of `INITIAL_PIXELS / 2`
+  ///   pixels in team A and `INITIAL_PIXELS / 2` pixel in team B. The payment is carried out via an
+  ///   ERC-2612 signature.
   /// @param params The arena creation parameters.
   /// @param deadline The deadline of the ERC-2612 signature.
   /// @param v The `v` parameter of the ERC-2612 signature.
@@ -266,8 +277,8 @@ contract PixelClash is
     bytes32 s
   ) public whenNotPaused nonReentrant {
     address owner = msg.sender;
-    uint256 fee = arenaCreationFee();
-    uint256 numPixelsPerTeam = fee / params.pixelFee / 2;
+    uint256 fee = arenaCreationFee(params.pixelFee);
+    uint256 numPixelsPerTeam = INITIAL_PIXELS / 2;
     try currencyToken.permit(owner, address(this), fee, deadline, v, r, s) {} catch {}
     currencyToken.safeTransferFrom(owner, address(this), fee);
 

@@ -26,7 +26,9 @@ const POOL_LIQUIDITY = 10n ** 18n;
 const INVALID_ARENA_ID = 0;
 
 const ONE_USDC = 1_000_000n; // 1 USDC (6 decimals, matching real USDC)
-const ARENA_CREATION_FEE = 20n * ONE_USDC;
+const BASE_ARENA_CREATION_FEE = 25n * ONE_USDC;
+const INITIAL_PIXELS = 10n;
+const ARENA_CREATION_FEE = INITIAL_PIXELS * ONE_USDC + BASE_ARENA_CREATION_FEE;
 
 const STANDARD_GRID_SIZE = 10_000;
 const STANDARD_MAX_DURATION = 3600n * 24n * 7n; // 7 days
@@ -272,7 +274,7 @@ describe("PixelClash", function () {
     expect(await pixelClash.paused()).to.be.false;
     expect(await pixelClash.currencyToken()).to.equal(await currencyToken.getAddress());
     expect(await pixelClash.vrfConsumer()).to.not.equal(ethers.ZeroAddress);
-    expect(await pixelClash.arenaCreationFee()).to.equal(ARENA_CREATION_FEE);
+    expect(await pixelClash.arenaCreationFee(ONE_USDC)).to.equal(ARENA_CREATION_FEE);
     await expect(pixelClash.getArenaData(INVALID_ARENA_ID)).to.be.revertedWithCustomError(
       pixelClash,
       "InvalidArenaId",
@@ -325,7 +327,7 @@ describe("PixelClash", function () {
     expect(arenaData.revenue).to.equal(0);
     expect(arenaData.balance).to.equal(0);
 
-    const numPixelsPerTeam = ARENA_CREATION_FEE / pixelFee / 2n;
+    const numPixelsPerTeam = INITIAL_PIXELS / 2n;
     expect(arenaData.teamACount).to.equal(numPixelsPerTeam);
     expect(arenaData.teamBCount).to.equal(numPixelsPerTeam);
 
@@ -350,7 +352,7 @@ describe("PixelClash", function () {
     expect(arenaData.revenue).to.equal(ONE_USDC);
     expect(arenaData.balance).to.equal(ONE_USDC);
 
-    const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / ONE_USDC / 2n;
+    const numPixelsPerTeamFromCreation = INITIAL_PIXELS / 2n;
     expect(arenaData.teamACount).to.equal(numPixelsPerTeamFromCreation + 1n);
     expect(arenaData.teamBCount).to.equal(numPixelsPerTeamFromCreation);
 
@@ -375,7 +377,7 @@ describe("PixelClash", function () {
     expect(arenaData.revenue).to.equal(ONE_USDC);
     expect(arenaData.balance).to.equal(ONE_USDC);
 
-    const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / ONE_USDC / 2n;
+    const numPixelsPerTeamFromCreation = INITIAL_PIXELS / 2n;
     expect(arenaData.teamACount).to.equal(numPixelsPerTeamFromCreation);
     expect(arenaData.teamBCount).to.equal(numPixelsPerTeamFromCreation + 1n);
 
@@ -400,7 +402,7 @@ describe("PixelClash", function () {
     expect(arenaData.revenue).to.equal(ONE_USDC * 2n);
     expect(arenaData.balance).to.equal(ONE_USDC * 2n);
 
-    const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / ONE_USDC / 2n;
+    const numPixelsPerTeamFromCreation = INITIAL_PIXELS / 2n;
     expect(arenaData.teamACount).to.equal(numPixelsPerTeamFromCreation + 2n);
     expect(arenaData.teamBCount).to.equal(numPixelsPerTeamFromCreation);
 
@@ -425,7 +427,7 @@ describe("PixelClash", function () {
     expect(arenaData.revenue).to.equal(ONE_USDC * 2n);
     expect(arenaData.balance).to.equal(ONE_USDC * 2n);
 
-    const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / ONE_USDC / 2n;
+    const numPixelsPerTeamFromCreation = INITIAL_PIXELS / 2n;
     expect(arenaData.teamACount).to.equal(numPixelsPerTeamFromCreation);
     expect(arenaData.teamBCount).to.equal(numPixelsPerTeamFromCreation + 2n);
 
@@ -472,7 +474,7 @@ describe("PixelClash", function () {
     expect(arenaData.revenue).to.equal(ONE_USDC * 46n);
     expect(arenaData.balance).to.equal(ONE_USDC * 46n);
 
-    const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / ONE_USDC / 2n;
+    const numPixelsPerTeamFromCreation = INITIAL_PIXELS / 2n;
     expect(arenaData.teamACount).to.equal(numPixelsPerTeamFromCreation + player1PixelCount);
     expect(arenaData.teamBCount).to.equal(numPixelsPerTeamFromCreation + player2PixelCount);
 
@@ -486,7 +488,7 @@ describe("PixelClash", function () {
     const { player1: player, currencyToken, pixelClash } = fixture;
     const arenaId = 1;
     const pixelFee = ONE_USDC;
-    const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / pixelFee / 2n;
+    const numPixelsPerTeamFromCreation = INITIAL_PIXELS / 2n;
     const pixelsAlreadyFilled = numPixelsPerTeamFromCreation * 2n;
     const gridSize = BigInt(STANDARD_GRID_SIZE);
     const remainingPixels = gridSize - pixelsAlreadyFilled;
@@ -521,7 +523,7 @@ describe("PixelClash", function () {
     const { player1: player, currencyToken, pixelClash } = fixture;
     const arenaId = 1;
     const pixelFee = ONE_USDC;
-    const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / pixelFee / 2n;
+    const numPixelsPerTeamFromCreation = INITIAL_PIXELS / 2n;
     const pixelsAlreadyFilled = numPixelsPerTeamFromCreation * 2n;
     const gridSize = BigInt(STANDARD_GRID_SIZE);
     const remainingPixels = gridSize - pixelsAlreadyFilled;
@@ -556,7 +558,7 @@ describe("PixelClash", function () {
     const { player1, player2, currencyToken, pixelClash } = fixture;
     const arenaId = 1;
     const pixelFee = ONE_USDC;
-    const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / pixelFee / 2n;
+    const numPixelsPerTeamFromCreation = INITIAL_PIXELS / 2n;
     const pixelsAlreadyFilled = numPixelsPerTeamFromCreation * 2n;
     const gridSize = BigInt(STANDARD_GRID_SIZE);
     const remainingPixels = gridSize - pixelsAlreadyFilled;
@@ -606,7 +608,7 @@ describe("PixelClash", function () {
     const { player1, player2, currencyToken, pixelClash } = fixture;
     const arenaId = 1;
     const pixelFee = ONE_USDC;
-    const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / pixelFee / 2n;
+    const numPixelsPerTeamFromCreation = INITIAL_PIXELS / 2n;
     const pixelsAlreadyFilled = numPixelsPerTeamFromCreation * 2n;
     const gridSize = BigInt(STANDARD_GRID_SIZE);
     const remainingPixels = gridSize - pixelsAlreadyFilled;
@@ -670,7 +672,7 @@ describe("PixelClash", function () {
     const { player1, player2, currencyToken, pixelClash } = fixture;
     const arenaId = 1;
     const pixelFee = ONE_USDC;
-    const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / pixelFee / 2n;
+    const numPixelsPerTeamFromCreation = INITIAL_PIXELS / 2n;
     const pixelsAlreadyFilled = numPixelsPerTeamFromCreation * 2n;
     const gridSize = BigInt(STANDARD_GRID_SIZE);
     const remainingPixels = gridSize - pixelsAlreadyFilled;
@@ -752,7 +754,7 @@ describe("PixelClash", function () {
     } = fixture;
     const arenaId = 1;
     const pixelFee = ONE_USDC;
-    const numPixelsPerTeamFromCreation = ARENA_CREATION_FEE / pixelFee / 2n;
+    const numPixelsPerTeamFromCreation = INITIAL_PIXELS / 2n;
     const pixelsAlreadyFilled = numPixelsPerTeamFromCreation * 2n;
     const gridSize = BigInt(STANDARD_GRID_SIZE);
     const remainingPixels = gridSize - pixelsAlreadyFilled;

@@ -6,7 +6,6 @@ import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Ini
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -139,17 +138,15 @@ contract PixelClash is
   function initialize(
     address initialOwner,
     ICurrencyToken currencyToken_,
-    ERC20Burnable pixelToken_,
     address vrfCoordinator_,
-    ISwapRouter swapRouter_,
-    IUniswapV3Pool swapPool_
+    SwapGateway swapGateway_
   ) public initializer {
     __Ownable_init(initialOwner);
     __Pausable_init();
 
     currencyToken = currencyToken_;
     vrfConsumer = new VRFConsumer(vrfCoordinator_);
-    swapGateway = new SwapGateway(currencyToken_, pixelToken_, swapRouter_, swapPool_);
+    swapGateway = swapGateway_;
 
     // Skip arena #0 because ID 0 is conventionally invalid.
     arenas.push();

@@ -1,7 +1,7 @@
 import type { AbstractSigner, BaseContract } from "ethers";
 import { ethers, upgrades } from "hardhat";
 
-import type { PixelClash } from "../typechain-types";
+import type { PixelClash, SwapGateway } from "../typechain-types";
 
 import { requireEnv } from "./utils";
 
@@ -56,6 +56,14 @@ export class Deployer {
     const arenaMethodsAddress = await arenaMethods.getAddress();
     console.log(`ArenaMethods:  ${arenaMethodsAddress}`);
 
+    const swapGateway = await this.deploy<SwapGateway>(
+      "SwapGateway",
+      currencyTokenAddress,
+      pixelTokenAddress,
+      swapRouterAddress,
+      swapPoolAddress,
+    );
+
     const PixelClashFactory = await ethers.getContractFactory("PixelClash", {
       libraries: {
         ArenaMethods: arenaMethodsAddress,
@@ -66,10 +74,8 @@ export class Deployer {
       [
         await this.getAddress(),
         currencyTokenAddress,
-        pixelTokenAddress,
         vrfWrapperAddress,
-        swapRouterAddress,
-        swapPoolAddress,
+        await swapGateway.getAddress(),
       ],
       {
         kind: "uups",

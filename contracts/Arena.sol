@@ -321,6 +321,7 @@ library ArenaMethods {
     address referrer
   ) external returns (uint256 acquired) {
     assert(player != referrer);
+    assert(count > 0);
     uint256 teamACount = getTeamACount(arena);
     uint256 teamBCount = getTeamBCount(arena);
     assert(teamACount + teamBCount < arena.gridSize);

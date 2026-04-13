@@ -10,6 +10,7 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 
 import {IUniswapV3Pool} from "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
@@ -63,8 +64,9 @@ contract PixelClash is
   bytes32 public constant CONFIG_ROLE = keccak256("CONFIG_ROLE");
 
   using Address for address payable;
-  using SafeERC20 for ICurrencyToken;
   using ArenaMethods for Arena;
+  using EnumerableSet for EnumerableSet.UintSet;
+  using SafeERC20 for ICurrencyToken;
 
   /// @notice New arena created.
   /// @param owner The owner of the arena.
@@ -125,10 +127,13 @@ contract PixelClash is
   Arena[] private arenas;
 
   /// @notice Arena IDs indexed by owner.
-  mapping(address => uint256[]) public arenaIdsByOwner;
+  mapping(address => uint256[]) private _arenaIdsByOwner;
 
   /// @notice Arena IDs indexed by tag.
-  mapping(string => uint256[]) public arenaIdsByTag;
+  mapping(string => uint256[]) private _arenaIdsByTag;
+
+  /// @notice Arena IDs indexed by the address of anyone who played in them.
+  mapping(address => EnumerableSet.UintSet) private _arenaIdsByPlayer;
 
   /// @notice Protocol revenue in `currencyToken`.
   uint256 public protocolRevenue;
@@ -232,25 +237,33 @@ contract PixelClash is
     return arena.getData();
   }
 
-  /// @notice Returns the IDs of the arenas created by a specific user.
-  /// @dev The IDs are returned in reverse creation order.
-  /// @dev The `offset` and `count` parameters are used for paging.
-  /// @return ids An array containing at most `count` IDs.
-  function getUserArenas(
-    address user,
+  function getArenaIds(
+    uint256[] storage ids,
     uint256 offset,
     uint256 count
-  ) public view returns (uint256[] memory ids) {
-    uint256 total = arenaIdsByOwner[user].length;
+  ) private view returns (uint256[] memory result) {
+    uint256 total = ids.length;
     if (offset >= total) {
       return new uint256[](0);
     }
     uint256 available = total - offset;
     uint256 size = available < count ? available : count;
-    ids = new uint256[](size);
+    result = new uint256[](size);
     for (uint256 i = 0; i < size; ++i) {
-      ids[i] = arenaIdsByOwner[user][total - 1 - offset - i];
+      result[i] = ids[total - 1 - offset - i];
     }
+  }
+
+  /// @notice Returns the IDs of the arenas created by a specific user.
+  /// @dev The IDs are returned in reverse creation order.
+  /// @dev The `offset` and `count` parameters are used for paging.
+  /// @return An array containing at most `count` IDs.
+  function getUserArenas(
+    address user,
+    uint256 offset,
+    uint256 count
+  ) public view returns (uint256[] memory) {
+    return getArenaIds(_arenaIdsByOwner[user], offset, count);
   }
 
   /// @notice Returns the IDs of the arenas associated with the specified tag.
@@ -262,7 +275,20 @@ contract PixelClash is
     uint256 offset,
     uint256 count
   ) public view returns (uint256[] memory ids) {
-    uint256 total = arenaIdsByTag[tag].length;
+    return getArenaIds(_arenaIdsByTag[tag], offset, count);
+  }
+
+  /// @notice Returns the IDs of arenas the specified player has participated in.
+  /// @dev The IDs are returned in reverse participation order.
+  /// @dev The `offset` and `count` parameters are used for paging.
+  /// @return ids An array containing at most `count` IDs.
+  function getArenasByPlayer(
+    address player,
+    uint256 offset,
+    uint256 count
+  ) public view returns (uint256[] memory ids) {
+    EnumerableSet.UintSet storage set = _arenaIdsByPlayer[player];
+    uint256 total = set.length();
     if (offset >= total) {
       return new uint256[](0);
     }
@@ -270,7 +296,7 @@ contract PixelClash is
     uint256 size = available < count ? available : count;
     ids = new uint256[](size);
     for (uint256 i = 0; i < size; ++i) {
-      ids[i] = arenaIdsByTag[tag][total - 1 - offset - i];
+      ids[i] = set.at(total - 1 - offset - i);
     }
   }
 
@@ -346,9 +372,10 @@ contract PixelClash is
     arena.initialize(owner, numPixelsPerTeam, params);
     protocolRevenue += fee;
 
-    arenaIdsByOwner[owner].push(id);
+    _arenaIdsByOwner[owner].push(id);
+    _arenaIdsByPlayer[owner].add(id);
     for (uint256 i = 0; i < tags.length; ++i) {
-      arenaIdsByTag[tags[i]].push(id);
+      _arenaIdsByTag[tags[i]].push(id);
     }
 
     emit CreateArena(owner, id);
@@ -404,6 +431,8 @@ contract PixelClash is
       uint256 refund = arena.pixelFee * (count - acquired);
       currencyToken.safeTransfer(player, refund);
     }
+
+    _arenaIdsByPlayer[player].add(arenaId);
 
     emit PurchasePixels(player, arenaId, teamB, count, acquired);
   }

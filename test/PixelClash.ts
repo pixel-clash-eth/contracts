@@ -407,6 +407,192 @@ describe("PixelClash", function () {
     expect(await pixelClash.getUserArenas(creatorAddress, 0, 0)).to.deep.equal([]);
   });
 
+  it("getUserArenas - lists are isolated per owner", async function () {
+    const fixture = await Fixture.load();
+    const { creator, player1, currencyToken, pixelClash } = fixture;
+    const creatorAddress = await creator.getAddress();
+    const player1Address = await player1.getAddress();
+
+    const params = {
+      teamAName: "Dogs",
+      teamALogo: "\u{1F436}",
+      teamALogoCid: ethers.ZeroHash,
+      teamAColor: 0xff0000,
+      teamBName: "Cats",
+      teamBLogo: "\u{1F431}",
+      teamBLogoCid: ethers.ZeroHash,
+      teamBColor: 0x0000ff,
+      gridSize: STANDARD_GRID_SIZE,
+      pixelFee: ONE_USDC,
+      maxDuration: STANDARD_MAX_DURATION,
+    };
+
+    // creator creates arenas 1 and 2
+    for (let i = 0; i < 2; ++i) {
+      await currencyToken.connect(creator).mint(ARENA_CREATION_FEE);
+      await currencyToken
+        .connect(creator)
+        .approve(await pixelClash.getAddress(), ARENA_CREATION_FEE);
+      await pixelClash
+        .connect(creator)
+        .createArenaWithPermit(params, [], ethers.MaxUint256, 0, ethers.ZeroHash, ethers.ZeroHash);
+    }
+
+    // player1 creates arena 3
+    await currencyToken.connect(player1).mint(ARENA_CREATION_FEE);
+    await currencyToken.connect(player1).approve(await pixelClash.getAddress(), ARENA_CREATION_FEE);
+    await pixelClash
+      .connect(player1)
+      .createArenaWithPermit(params, [], ethers.MaxUint256, 0, ethers.ZeroHash, ethers.ZeroHash);
+
+    expect(await pixelClash.getUserArenas(creatorAddress, 0, 10)).to.deep.equal([2n, 1n]);
+    expect(await pixelClash.getUserArenas(player1Address, 0, 10)).to.deep.equal([3n]);
+    expect(await pixelClash.getUserArenas(ethers.ZeroAddress, 0, 10)).to.deep.equal([]);
+  });
+
+  it("getArenasByTag - paging across multiple arenas", async function () {
+    const fixture = await Fixture.load();
+
+    // createTestArena tags each arena with ["animals", "dogs", "cats"]
+    await fixture.createTestArena(); // arena 1
+    await fixture.createTestArena(); // arena 2
+    await fixture.createTestArena(); // arena 3
+
+    const { pixelClash } = fixture;
+    expect(await pixelClash.getArenasByTag("animals", 0, 10)).to.deep.equal([3n, 2n, 1n]);
+    expect(await pixelClash.getArenasByTag("animals", 0, 2)).to.deep.equal([3n, 2n]);
+    expect(await pixelClash.getArenasByTag("animals", 1, 2)).to.deep.equal([2n, 1n]);
+    expect(await pixelClash.getArenasByTag("animals", 2, 10)).to.deep.equal([1n]);
+    expect(await pixelClash.getArenasByTag("animals", 3, 10)).to.deep.equal([]);
+    expect(await pixelClash.getArenasByTag("animals", 0, 0)).to.deep.equal([]);
+  });
+
+  it("getArenasByTag - tag specificity", async function () {
+    const fixture = await Fixture.load();
+    const { creator, currencyToken, pixelClash } = fixture;
+
+    const params = {
+      teamAName: "Dogs",
+      teamALogo: "\u{1F436}",
+      teamALogoCid: ethers.ZeroHash,
+      teamAColor: 0xff0000,
+      teamBName: "Cats",
+      teamBLogo: "\u{1F431}",
+      teamBLogoCid: ethers.ZeroHash,
+      teamBColor: 0x0000ff,
+      gridSize: STANDARD_GRID_SIZE,
+      pixelFee: ONE_USDC,
+      maxDuration: STANDARD_MAX_DURATION,
+    };
+
+    const createArena = async (tags: string[]) => {
+      await currencyToken.connect(creator).mint(ARENA_CREATION_FEE);
+      await currencyToken
+        .connect(creator)
+        .approve(await pixelClash.getAddress(), ARENA_CREATION_FEE);
+      await pixelClash
+        .connect(creator)
+        .createArenaWithPermit(
+          params,
+          tags,
+          ethers.MaxUint256,
+          0,
+          ethers.ZeroHash,
+          ethers.ZeroHash,
+        );
+    };
+
+    await createArena(["sport", "football"]); // arena 1
+    await createArena(["sport", "basketball"]); // arena 2
+    await createArena([]); // arena 3 — untagged
+
+    expect(await pixelClash.getArenasByTag("sport", 0, 10)).to.deep.equal([2n, 1n]);
+    expect(await pixelClash.getArenasByTag("football", 0, 10)).to.deep.equal([1n]);
+    expect(await pixelClash.getArenasByTag("basketball", 0, 10)).to.deep.equal([2n]);
+    expect(await pixelClash.getArenasByTag("unknown", 0, 10)).to.deep.equal([]);
+    // untagged arena 3 appears in no tag lists
+    expect(await pixelClash.getArenasByTag("sport", 0, 10)).to.not.include(3n);
+  });
+
+  it("getArenasByPlayer - empty for non-participant", async function () {
+    const { player1, pixelClash } = await Fixture.load();
+    const player1Address = await player1.getAddress();
+    expect(await pixelClash.getArenasByPlayer(player1Address, 0, 10)).to.deep.equal([]);
+    expect(await pixelClash.getArenasByPlayer(ethers.ZeroAddress, 0, 10)).to.deep.equal([]);
+  });
+
+  it("getArenasByPlayer - creator tracked on arena creation", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const { creator, pixelClash } = fixture;
+    const creatorAddress = await creator.getAddress();
+    expect(await pixelClash.getArenasByPlayer(creatorAddress, 0, 10)).to.deep.equal([1n]);
+  });
+
+  it("getArenasByPlayer - player tracked after first purchase", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const { player1, currencyToken, pixelClash } = fixture;
+    const player1Address = await player1.getAddress();
+
+    await currencyToken.connect(player1).mint(ONE_USDC);
+    await currencyToken.connect(player1).approve(await pixelClash.getAddress(), ONE_USDC);
+    await fixture.purchasePixels(player1, 1, false, 1, null);
+
+    expect(await pixelClash.getArenasByPlayer(player1Address, 0, 10)).to.deep.equal([1n]);
+  });
+
+  it("getArenasByPlayer - no duplicates from multiple purchases in same arena", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const { player1, currencyToken, pixelClash } = fixture;
+    const player1Address = await player1.getAddress();
+
+    await currencyToken.connect(player1).mint(ONE_USDC * 2n);
+    await currencyToken.connect(player1).approve(await pixelClash.getAddress(), ONE_USDC * 2n);
+    await fixture.purchasePixels(player1, 1, false, 1, null);
+    await fixture.purchasePixels(player1, 1, true, 1, null);
+
+    expect(await pixelClash.getArenasByPlayer(player1Address, 0, 10)).to.deep.equal([1n]);
+  });
+
+  it("getArenasByPlayer - creator not duplicated when also purchasing in own arena", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const { creator, currencyToken, pixelClash } = fixture;
+    const creatorAddress = await creator.getAddress();
+
+    await currencyToken.connect(creator).mint(ONE_USDC);
+    await currencyToken.connect(creator).approve(await pixelClash.getAddress(), ONE_USDC);
+    await fixture.purchasePixels(creator, 1, false, 1, null);
+
+    expect(await pixelClash.getArenasByPlayer(creatorAddress, 0, 10)).to.deep.equal([1n]);
+  });
+
+  it("getArenasByPlayer - paging across multiple arenas", async function () {
+    const fixture = await Fixture.load();
+    const { player1, currencyToken, pixelClash } = fixture;
+    const player1Address = await player1.getAddress();
+
+    for (let i = 0; i < 3; ++i) {
+      await fixture.createTestArena();
+      await currencyToken.connect(player1).mint(ONE_USDC);
+      await currencyToken.connect(player1).approve(await pixelClash.getAddress(), ONE_USDC);
+      await fixture.purchasePixels(player1, i + 1, false, 1, null);
+    }
+
+    expect(await pixelClash.getArenasByPlayer(player1Address, 0, 10)).to.deep.equal([3n, 2n, 1n]);
+    expect(await pixelClash.getArenasByPlayer(player1Address, 0, 2)).to.deep.equal([3n, 2n]);
+    expect(await pixelClash.getArenasByPlayer(player1Address, 1, 2)).to.deep.equal([2n, 1n]);
+    expect(await pixelClash.getArenasByPlayer(player1Address, 2, 10)).to.deep.equal([1n]);
+    expect(await pixelClash.getArenasByPlayer(player1Address, 3, 10)).to.deep.equal([]);
+    expect(await pixelClash.getArenasByPlayer(player1Address, 0, 0)).to.deep.equal([]);
+  });
+
   it("purchase pixel in team A", async function () {
     const fixture = await Fixture.load();
     await fixture.createTestArena();

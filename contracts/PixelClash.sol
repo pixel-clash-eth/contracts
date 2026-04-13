@@ -124,6 +124,9 @@ contract PixelClash is
   /// @notice List of arenas.
   Arena[] private arenas;
 
+  /// @notice Arena IDs indexed by tag.
+  mapping(string => uint256[]) public arenaIdsByTag;
+
   /// @notice Protocol revenue in `currencyToken`.
   uint256 public protocolRevenue;
 
@@ -226,6 +229,27 @@ contract PixelClash is
     return arena.getData();
   }
 
+  /// @notice Returns the IDs of the arenas associated with the specified tag.
+  /// @dev The IDs are returned in reverse creation order.
+  /// @dev The `offset` and `count` parameters are used for paging.
+  /// @return ids An array containing at most `count` IDs.
+  function getArenasByTag(
+    string calldata tag,
+    uint256 offset,
+    uint256 count
+  ) public view returns (uint256[] memory ids) {
+    uint256 total = arenaIdsByTag[tag].length;
+    if (offset >= total) {
+      return new uint256[](0);
+    }
+    uint256 available = total - offset;
+    uint256 size = available < count ? available : count;
+    ids = new uint256[](size);
+    for (uint256 i = 0; i < size; i++) {
+      ids[i] = arenaIdsByTag[tag][total - 1 - offset - i];
+    }
+  }
+
   /// @notice Returns the range including the given pixel.
   /// @param arenaId The arena ID.
   /// @param index The zero-based index of the pixel to query. Must be strictly less than the
@@ -280,6 +304,7 @@ contract PixelClash is
   /// @param s The `s` parameter of the ERC-2612 signature.
   function createArenaWithPermit(
     CreateArenaParams calldata params,
+    string[] calldata tags,
     uint256 deadline,
     uint8 v,
     bytes32 r,
@@ -296,6 +321,10 @@ contract PixelClash is
     Arena storage arena = arenas[id];
     arena.initialize(owner, numPixelsPerTeam, params);
     protocolRevenue += fee;
+
+    for (uint256 i = 0; i < tags.length; ++i) {
+      arenaIdsByTag[tags[i]].push(id);
+    }
 
     emit CreateArena(owner, id);
     emit PurchasePixels(owner, id, false, numPixelsPerTeam, numPixelsPerTeam);

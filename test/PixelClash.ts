@@ -242,7 +242,14 @@ class Fixture {
 
     await this._pixelClash
       .connect(creator)
-      .createArenaWithPermit(params, ethers.MaxUint256, 0, ethers.ZeroHash, ethers.ZeroHash);
+      .createArenaWithPermit(
+        params,
+        ["animals", "dogs", "cats"],
+        ethers.MaxUint256,
+        0,
+        ethers.ZeroHash,
+        ethers.ZeroHash,
+      );
   }
 
   public async purchasePixels(
@@ -288,6 +295,8 @@ describe("PixelClash", function () {
       pixelClash,
       "InvalidArenaId",
     );
+    expect(await pixelClash.getArenasByTag("animals", 0, 10)).to.deep.equal([]);
+    expect(await pixelClash.getArenasByTag("dogs", 0, 10)).to.deep.equal([]);
     expect(await swapGateway.inputToken()).to.equal(await currencyToken.getAddress());
     expect(await swapGateway.targetToken()).to.equal(await pixelToken.getAddress());
     expect(await swapGateway.swapRouter()).to.equal(process.env.UNISWAP_V3_ROUTER);
@@ -317,7 +326,14 @@ describe("PixelClash", function () {
 
     await pixelClash
       .connect(creator)
-      .createArenaWithPermit(params, ethers.MaxUint256, 0, ethers.ZeroHash, ethers.ZeroHash);
+      .createArenaWithPermit(
+        params,
+        ["animals", "dogs", "cats"],
+        ethers.MaxUint256,
+        0,
+        ethers.ZeroHash,
+        ethers.ZeroHash,
+      );
 
     const arenaData = await pixelClash.getArenaData(1);
     expect(arenaData.owner).to.equal(await creator.getAddress());
@@ -337,6 +353,13 @@ describe("PixelClash", function () {
     expect(arenaData.teamBCount).to.equal(numPixelsPerTeam);
 
     expect(await pixelClash.protocolRevenue()).to.equal(ARENA_CREATION_FEE);
+
+    expect(await pixelClash.getArenasByTag("animals", 0, 10)).to.deep.equal([1n]);
+    expect(await pixelClash.getArenasByTag("dogs", 0, 10)).to.deep.equal([1n]);
+    expect(await pixelClash.getArenasByTag("cats", 0, 10)).to.deep.equal([1n]);
+    expect(await pixelClash.getArenasByTag("unknown", 0, 10)).to.deep.equal([]);
+    expect(await pixelClash.getArenasByTag("animals", 1, 10)).to.deep.equal([]);
+    expect(await pixelClash.getArenasByTag("animals", 0, 0)).to.deep.equal([]);
   });
 
   it("purchase pixel in team A", async function () {

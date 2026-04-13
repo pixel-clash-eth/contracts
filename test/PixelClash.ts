@@ -276,7 +276,8 @@ class Fixture {
 
 describe("PixelClash", function () {
   it("initial state", async function () {
-    const { owner, currencyToken, pixelToken, pixelClash, swapGateway } = await Fixture.load();
+    const { owner, creator, currencyToken, pixelToken, pixelClash, swapGateway } =
+      await Fixture.load();
     const ownerAddress = await owner.getAddress();
     expect(await pixelClash.hasRole(await pixelClash.DEFAULT_ADMIN_ROLE(), ownerAddress)).to.be
       .true;
@@ -297,6 +298,8 @@ describe("PixelClash", function () {
     );
     expect(await pixelClash.getArenasByTag("animals", 0, 10)).to.deep.equal([]);
     expect(await pixelClash.getArenasByTag("dogs", 0, 10)).to.deep.equal([]);
+    expect(await pixelClash.getUserArenas(await owner.getAddress(), 0, 10)).to.deep.equal([]);
+    expect(await pixelClash.getUserArenas(await creator.getAddress(), 0, 10)).to.deep.equal([]);
     expect(await swapGateway.inputToken()).to.equal(await currencyToken.getAddress());
     expect(await swapGateway.targetToken()).to.equal(await pixelToken.getAddress());
     expect(await swapGateway.swapRouter()).to.equal(process.env.UNISWAP_V3_ROUTER);
@@ -360,6 +363,48 @@ describe("PixelClash", function () {
     expect(await pixelClash.getArenasByTag("unknown", 0, 10)).to.deep.equal([]);
     expect(await pixelClash.getArenasByTag("animals", 1, 10)).to.deep.equal([]);
     expect(await pixelClash.getArenasByTag("animals", 0, 0)).to.deep.equal([]);
+
+    const creatorAddress = await creator.getAddress();
+    expect(await pixelClash.getUserArenas(creatorAddress, 0, 10)).to.deep.equal([1n]);
+    expect(await pixelClash.getUserArenas(creatorAddress, 1, 10)).to.deep.equal([]);
+    expect(await pixelClash.getUserArenas(creatorAddress, 0, 0)).to.deep.equal([]);
+    expect(await pixelClash.getUserArenas(ethers.ZeroAddress, 0, 10)).to.deep.equal([]);
+  });
+
+  it("getUserArenas paging", async function () {
+    const { creator, pixelClash, currencyToken } = await Fixture.load();
+    const creatorAddress = await creator.getAddress();
+
+    const pixelFee = ONE_USDC;
+    const params = {
+      teamAName: "Dogs",
+      teamALogo: "\u{1F436}",
+      teamALogoCid: ethers.ZeroHash,
+      teamAColor: 0xff0000,
+      teamBName: "Cats",
+      teamBLogo: "\u{1F431}",
+      teamBLogoCid: ethers.ZeroHash,
+      teamBColor: 0x0000ff,
+      gridSize: STANDARD_GRID_SIZE,
+      pixelFee,
+      maxDuration: STANDARD_MAX_DURATION,
+    };
+    for (let i = 0; i < 3; ++i) {
+      await currencyToken.connect(creator).mint(ARENA_CREATION_FEE);
+      await currencyToken
+        .connect(creator)
+        .approve(await pixelClash.getAddress(), ARENA_CREATION_FEE);
+      await pixelClash
+        .connect(creator)
+        .createArenaWithPermit(params, [], ethers.MaxUint256, 0, ethers.ZeroHash, ethers.ZeroHash);
+    }
+
+    expect(await pixelClash.getUserArenas(creatorAddress, 0, 10)).to.deep.equal([3n, 2n, 1n]);
+    expect(await pixelClash.getUserArenas(creatorAddress, 0, 2)).to.deep.equal([3n, 2n]);
+    expect(await pixelClash.getUserArenas(creatorAddress, 1, 2)).to.deep.equal([2n, 1n]);
+    expect(await pixelClash.getUserArenas(creatorAddress, 2, 10)).to.deep.equal([1n]);
+    expect(await pixelClash.getUserArenas(creatorAddress, 3, 10)).to.deep.equal([]);
+    expect(await pixelClash.getUserArenas(creatorAddress, 0, 0)).to.deep.equal([]);
   });
 
   it("purchase pixel in team A", async function () {

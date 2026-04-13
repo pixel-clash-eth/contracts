@@ -124,6 +124,9 @@ contract PixelClash is
   /// @notice List of arenas.
   Arena[] private arenas;
 
+  /// @notice Arena IDs indexed by owner.
+  mapping(address => uint256[]) public arenaIdsByOwner;
+
   /// @notice Arena IDs indexed by tag.
   mapping(string => uint256[]) public arenaIdsByTag;
 
@@ -229,6 +232,27 @@ contract PixelClash is
     return arena.getData();
   }
 
+  /// @notice Returns the IDs of the arenas created by a specific user.
+  /// @dev The IDs are returned in reverse creation order.
+  /// @dev The `offset` and `count` parameters are used for paging.
+  /// @return ids An array containing at most `count` IDs.
+  function getUserArenas(
+    address user,
+    uint256 offset,
+    uint256 count
+  ) public view returns (uint256[] memory ids) {
+    uint256 total = arenaIdsByOwner[user].length;
+    if (offset >= total) {
+      return new uint256[](0);
+    }
+    uint256 available = total - offset;
+    uint256 size = available < count ? available : count;
+    ids = new uint256[](size);
+    for (uint256 i = 0; i < size; ++i) {
+      ids[i] = arenaIdsByOwner[user][total - 1 - offset - i];
+    }
+  }
+
   /// @notice Returns the IDs of the arenas associated with the specified tag.
   /// @dev The IDs are returned in reverse creation order.
   /// @dev The `offset` and `count` parameters are used for paging.
@@ -245,7 +269,7 @@ contract PixelClash is
     uint256 available = total - offset;
     uint256 size = available < count ? available : count;
     ids = new uint256[](size);
-    for (uint256 i = 0; i < size; i++) {
+    for (uint256 i = 0; i < size; ++i) {
       ids[i] = arenaIdsByTag[tag][total - 1 - offset - i];
     }
   }
@@ -322,6 +346,7 @@ contract PixelClash is
     arena.initialize(owner, numPixelsPerTeam, params);
     protocolRevenue += fee;
 
+    arenaIdsByOwner[owner].push(id);
     for (uint256 i = 0; i < tags.length; ++i) {
       arenaIdsByTag[tags[i]].push(id);
     }

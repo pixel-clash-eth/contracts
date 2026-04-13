@@ -1210,4 +1210,220 @@ describe("PixelClash", function () {
     expect(burnedPixels).to.be.gte((swappedAmount * 9895n) / 10000n);
     expect(burnedPixels).to.be.lte(swappedAmount);
   });
+
+  it("time out, draw, and swap", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const {
+      creator,
+      player1,
+      player2,
+      currencyToken,
+      pixelToken,
+      pixelClash,
+      mockVrfCoordinator,
+      swapGateway,
+    } = fixture;
+    const arenaId = 1;
+    const pixelFee = ONE_USDC;
+    const numPixelsPerTeamFromCreation = INITIAL_PIXELS / 2n;
+
+    // Partially fill the arena — leave it well short of the grid so it stays OPEN
+    const player1PixelCount = 100n; // team A
+    const player2PixelCount = 80n; // team B
+    const player1Cost = pixelFee * player1PixelCount;
+    const player2Cost = pixelFee * player2PixelCount;
+    const totalRevenue = player1Cost + player2Cost;
+
+    await currencyToken.connect(player1).mint(player1Cost);
+    await currencyToken.connect(player1).approve(await pixelClash.getAddress(), player1Cost);
+    await currencyToken.connect(player2).mint(player2Cost);
+    await currencyToken.connect(player2).approve(await pixelClash.getAddress(), player2Cost);
+
+    await fixture.purchasePixels(
+      player1,
+      arenaId,
+      /*teamB=*/ false,
+      player1PixelCount,
+      /*referrer=*/ null,
+    );
+    await fixture.purchasePixels(
+      player2,
+      arenaId,
+      /*teamB=*/ true,
+      player2PixelCount,
+      /*referrer=*/ null,
+    );
+
+    // Arena is still OPEN (not full)
+    expect((await pixelClash.getArenaData(arenaId)).state).to.equal(ARENA_STATE_OPEN);
+
+    // ── Advance time past maxDuration ────────────────────────────────────────
+    await time.increase(STANDARD_MAX_DURATION + 1n);
+
+    // Arena must now be in TIMED_OUT state
+    expect((await pixelClash.getArenaData(arenaId)).state).to.equal(ARENA_STATE_TIMED_OUT);
+
+    // ── Trigger the draw ─────────────────────────────────────────────────────
+    const drawPrice = ((await pixelClash.getDrawPrice()) * 110n) / 100n;
+    const drawReceipt = await (
+      await pixelClash.connect(player1).draw(arenaId, { value: drawPrice })
+    ).wait();
+
+    // Extract VRF request ID from the VRFRequest event
+    const vrfRequestLog = drawReceipt!.logs
+      .map((log) => {
+        try {
+          return pixelClash.interface.parseLog(log);
+        } catch {
+          return null;
+        }
+      })
+      .find((log) => log?.name === "VRFRequest")!;
+    const vrfRequestId: bigint = vrfRequestLog.args.vrfRequestId;
+
+    // Arena must be in DRAWING state, vrfRequestId must be set
+    {
+      const arenaData = await pixelClash.getArenaData(arenaId);
+      expect(arenaData.state).to.equal(ARENA_STATE_DRAWING);
+      expect(arenaData.vrfRequestId).to.equal(vrfRequestId);
+    }
+    expect(await pixelClash.arenaIdsByVrfRequestId(vrfRequestId)).to.equal(arenaId);
+
+    // ── Mine 10 blocks (VRF_REQUEST_CONFIRMATIONS) ───────────────────────────
+    await mine(10);
+
+    // ── Snapshot balances before the draw triggers swap&burn ─────────────────
+    const poolAddress = await swapGateway.swapPool();
+    const pixelSupplyBefore = await pixelToken.totalSupply();
+    const poolCurrencyBalanceBefore = await currencyToken.balanceOf(poolAddress);
+
+    // ── Simulate the ChainLink VRF response ──────────────────────────────────
+    // random = 0 → winner = 0 % acquiredPixels = 0 → pixel 0 (team A, owned by creator) → team A wins.
+    const randomValue = 0n;
+
+    const vrfConsumerContract = await ethers.getContractAt(
+      "VRFConsumer",
+      await pixelClash.vrfConsumer(),
+    );
+    const vrfWrapperAddress = await vrfConsumerContract.i_vrfV2PlusWrapper();
+
+    await expect(
+      mockVrfCoordinator.fulfillRandomWordsWithOverride(vrfRequestId, vrfWrapperAddress, [
+        randomValue,
+      ]),
+    )
+      .to.emit(pixelClash, "ArenaClosure")
+      .withArgs(arenaId, vrfRequestId, 0n /* winning pixel index */);
+
+    // ── Check arena state after draw ─────────────────────────────────────────
+    const arenaData = await pixelClash.getArenaData(arenaId);
+    expect(arenaData.state).to.equal(ARENA_STATE_DRAWN);
+    expect(arenaData.winner).to.equal(0n); // pixel 0
+    expect(arenaData.vrfRequestId).to.equal(0n); // cleared after draw
+    expect(arenaData.revenue).to.equal(totalRevenue);
+    // Grid is not fully filled — the arena timed out with pixels still available
+    expect(arenaData.teamACount + arenaData.teamBCount).to.be.lt(BigInt(STANDARD_GRID_SIZE));
+
+    // arenaIdsByVrfRequestId must be cleared
+    expect(await pixelClash.arenaIdsByVrfRequestId(vrfRequestId)).to.equal(0n);
+
+    // ── Check prizes ─────────────────────────────────────────────────────────
+    // No referrers, so sponsorPrize and topReferralPrize are both zero.
+    const expectedWinnerPrize = (totalRevenue * 45n) / 100n;
+    const expectedTeamPrize = (totalRevenue * 25n) / 100n;
+    const expectedSponsorPrize = 0n;
+    const expectedTopReferralPrize = 0n;
+    const expectedArenaOwnerPrize = (totalRevenue * 5n) / 100n;
+    const expectedTotalPrizes =
+      expectedWinnerPrize +
+      expectedTeamPrize +
+      expectedSponsorPrize +
+      expectedTopReferralPrize +
+      expectedArenaOwnerPrize;
+    const expectedArenaProtocolFee = totalRevenue - expectedTotalPrizes;
+
+    // arena.balance = total prizes (protocol fee was removed during draw)
+    expect(arenaData.balance).to.equal(expectedTotalPrizes);
+
+    const allPrizes = await pixelClash.getAllPrizes(arenaId);
+    expect(allPrizes.winnerPrize).to.equal(expectedWinnerPrize);
+    expect(allPrizes.teamPrize).to.equal(expectedTeamPrize);
+    expect(allPrizes.sponsorPrize).to.equal(expectedSponsorPrize);
+    expect(allPrizes.topReferralPrize).to.equal(expectedTopReferralPrize);
+    expect(allPrizes.arenaOwnerPrize).to.equal(expectedArenaOwnerPrize);
+
+    // ── Per-player prizes ─────────────────────────────────────────────────────
+    // Team A won: teamACount = numPixelsPerTeamFromCreation (creator) + player1PixelCount
+    const teamACount = numPixelsPerTeamFromCreation + player1PixelCount;
+
+    const creatorAddress = await creator.getAddress();
+    const player1Address = await player1.getAddress();
+    const player2Address = await player2.getAddress();
+
+    // creator: winner (pixel 0) + team A proportional + arena owner
+    const creatorExpectedTeamPrize =
+      (totalRevenue * 25n * numPixelsPerTeamFromCreation) / (100n * teamACount);
+    const creatorPrizes = await pixelClash.getPrizesFor(arenaId, creatorAddress);
+    expect(creatorPrizes.winnerPrize).to.equal(expectedWinnerPrize);
+    expect(creatorPrizes.teamPrize).to.equal(creatorExpectedTeamPrize);
+    expect(creatorPrizes.sponsorPrize).to.equal(0n);
+    expect(creatorPrizes.topReferralPrize).to.equal(0n);
+    expect(creatorPrizes.arenaOwnerPrize).to.equal(expectedArenaOwnerPrize);
+
+    const creatorTotalPrize = await pixelClash.getPrizeFor(arenaId, creatorAddress);
+    expect(creatorTotalPrize).to.equal(
+      expectedWinnerPrize + creatorExpectedTeamPrize + expectedArenaOwnerPrize,
+    );
+
+    // player1: team A proportional only
+    const player1ExpectedTeamPrize = (totalRevenue * 25n * player1PixelCount) / (100n * teamACount);
+    const player1Prizes = await pixelClash.getPrizesFor(arenaId, player1Address);
+    expect(player1Prizes.winnerPrize).to.equal(0n);
+    expect(player1Prizes.teamPrize).to.equal(player1ExpectedTeamPrize);
+    expect(player1Prizes.sponsorPrize).to.equal(0n);
+    expect(player1Prizes.topReferralPrize).to.equal(0n);
+    expect(player1Prizes.arenaOwnerPrize).to.equal(0n);
+
+    const player1TotalPrize = await pixelClash.getPrizeFor(arenaId, player1Address);
+    expect(player1TotalPrize).to.equal(player1ExpectedTeamPrize);
+
+    // player2: team B lost, no prizes
+    const player2Prizes = await pixelClash.getPrizesFor(arenaId, player2Address);
+    expect(player2Prizes.winnerPrize).to.equal(0n);
+    expect(player2Prizes.teamPrize).to.equal(0n);
+    expect(player2Prizes.sponsorPrize).to.equal(0n);
+    expect(player2Prizes.topReferralPrize).to.equal(0n);
+    expect(player2Prizes.arenaOwnerPrize).to.equal(0n);
+
+    const player2TotalPrize = await pixelClash.getPrizeFor(arenaId, player2Address);
+    expect(player2TotalPrize).to.equal(0n);
+
+    // team prizes must add up to expectedTeamPrize (modulo integer division rounding)
+    expect(creatorExpectedTeamPrize + player1ExpectedTeamPrize).to.be.lte(expectedTeamPrize);
+
+    // ── Swap & burn ───────────────────────────────────────────────────────────
+    const swappedAmount = ARENA_CREATION_FEE + expectedArenaProtocolFee;
+
+    // protocolRevenue is zeroed on a successful swap — nothing stranded in PixelClash.
+    expect(await pixelClash.protocolRevenue()).to.equal(0n);
+
+    // Only prize money remains in PixelClash; the protocol cut was transferred to the pool.
+    expect(await currencyToken.balanceOf(await pixelClash.getAddress())).to.equal(
+      expectedTotalPrizes,
+    );
+
+    // The full protocol cut landed in the Uniswap pool.
+    expect(await currencyToken.balanceOf(poolAddress)).to.equal(
+      poolCurrencyBalanceBefore + swappedAmount,
+    );
+
+    // The pixel tokens received from the swap were burned.
+    // At tick 0 (1:1 wei price, 0.05 % pool fee, 1 % max slippage), the burned amount is bounded
+    // between swappedAmount × 0.9895 and swappedAmount.
+    const burnedPixels = pixelSupplyBefore - (await pixelToken.totalSupply());
+    expect(burnedPixels).to.be.gte((swappedAmount * 9895n) / 10000n);
+    expect(burnedPixels).to.be.lte(swappedAmount);
+  });
 });

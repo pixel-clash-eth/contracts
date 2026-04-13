@@ -61,7 +61,7 @@ library ReferralHeapMethods {
   ) internal returns (uint256) {
     uint64 index = heap.indices[referrer];
     if (index != 0) {
-      index -= 1;
+      --index;
       heap.queue[index].revenue += revenue;
     } else {
       assert(heap.queue.length < uint256(type(uint64).max));
@@ -119,7 +119,7 @@ library ReferralHeapMethods {
         referrers[1] = heap.queue[1];
         referrers[2] = heap.queue[2];
       }
-      for (uint256 i = 3; i < min(7, heap.queue.length); i++) {
+      for (uint256 i = 3; i < min(7, heap.queue.length); ++i) {
         if (heap.queue[i].revenue > referrers[2].revenue) {
           referrers[2] = heap.queue[i];
         }

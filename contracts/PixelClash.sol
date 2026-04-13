@@ -46,6 +46,10 @@ uint256 constant INITIAL_PIXELS = 10;
 // ChainLink VRF callback gas limit.
 uint32 constant VRF_CALLBACK_GAS_LIMIT = 1_000_000;
 
+// Referral discount: buyers who provide a referrer pay 10% less.
+uint256 constant REFERRAL_DISCOUNT_NUMERATOR = 9;
+uint256 constant REFERRAL_DISCOUNT_DENOMINATOR = 10;
+
 // Represents a generic ERC-20 token with ERC-2612 permits.
 //
 // We use this type of token as currency for all payments and prizes in the game.
@@ -422,13 +426,18 @@ contract PixelClash is
       revert InvalidArgument();
     }
 
-    uint256 fee = arena.pixelFee * count;
+    uint256 effectivePixelFee =
+      (referrer != address(0))
+        ? (arena.pixelFee * REFERRAL_DISCOUNT_NUMERATOR) / REFERRAL_DISCOUNT_DENOMINATOR
+        : arena.pixelFee;
+
+    uint256 fee = effectivePixelFee * count;
     try currencyToken.permit(player, address(this), fee, deadline, v, r, s) {} catch {}
     currencyToken.safeTransferFrom(player, address(this), fee);
 
-    uint256 acquired = arena.acquirePixels(player, count, teamB, referrer);
+    uint256 acquired = arena.acquirePixels(player, count, teamB, referrer, effectivePixelFee);
     if (acquired < count) {
-      uint256 refund = arena.pixelFee * (count - acquired);
+      uint256 refund = effectivePixelFee * (count - acquired);
       currencyToken.safeTransfer(player, refund);
     }
 

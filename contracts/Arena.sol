@@ -311,6 +311,8 @@ library ArenaMethods {
   /// @param teamB Whether tha player is playing in team A or B. If true, the pixels will be
   ///   acquired by team B, otherwise they'll be acquire by team A.
   /// @param referrer The referrer's address, or the zero address if this purchase wasn't referred.
+  /// @param effectivePixelFee The per-pixel fee after any applicable discounts (eg. referral
+  ///   discount). Must equal `arena.pixelFee` when there is no discount.
   /// @return acquired The number of acquired pixels, which may be less than `count` if less were
   ///   available.
   function acquirePixels(
@@ -318,7 +320,8 @@ library ArenaMethods {
     address player,
     uint256 count,
     bool teamB,
-    address referrer
+    address referrer,
+    uint256 effectivePixelFee
   ) external returns (uint256 acquired) {
     assert(player != referrer);
     assert(count > 0);
@@ -338,7 +341,7 @@ library ArenaMethods {
       );
       arena.teamAShares[player] += acquired;
     }
-    uint256 fee = arena.pixelFee * acquired;
+    uint256 fee = effectivePixelFee * acquired;
     arena.revenue += fee;
     arena.balance += fee;
     if (referrer != address(0)) {

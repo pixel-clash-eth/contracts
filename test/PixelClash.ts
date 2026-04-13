@@ -39,6 +39,12 @@ const ARENA_STATE_TIMED_OUT = 2;
 const ARENA_STATE_DRAWING = 3;
 const ARENA_STATE_DRAWN = 4;
 
+const REFERRAL_DISCOUNT_NUMERATOR = 9n;
+const REFERRAL_DISCOUNT_DENOMINATOR = 10n;
+
+const DISCOUNTED_PIXEL_FEE =
+  (ONE_USDC * REFERRAL_DISCOUNT_NUMERATOR) / REFERRAL_DISCOUNT_DENOMINATOR;
+
 class Fixture {
   private static async _deploy(): Promise<Fixture> {
     const [owner, creator, player1, player2] = await ethers.getSigners();
@@ -1425,5 +1431,263 @@ describe("PixelClash", function () {
     const burnedPixels = pixelSupplyBefore - (await pixelToken.totalSupply());
     expect(burnedPixels).to.be.gte((swappedAmount * 9895n) / 10000n);
     expect(burnedPixels).to.be.lte(swappedAmount);
+  });
+
+  it("self-referral is rejected", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const { player1, currencyToken, pixelClash } = fixture;
+    const player1Address = await player1.getAddress();
+
+    await currencyToken.connect(player1).mint(DISCOUNTED_PIXEL_FEE);
+    await currencyToken
+      .connect(player1)
+      .approve(await pixelClash.getAddress(), DISCOUNTED_PIXEL_FEE);
+
+    await expect(
+      pixelClash
+        .connect(player1)
+        .purchasePixelsWithPermit(
+          1,
+          false,
+          1,
+          player1Address,
+          ethers.MaxUint256,
+          0,
+          ethers.ZeroHash,
+          ethers.ZeroHash,
+        ),
+    ).to.be.revertedWithCustomError(pixelClash, "SelfReferralForbidden");
+  });
+
+  it("player pays 10% less when a referrer is provided", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const { creator, player1, currencyToken, pixelClash } = fixture;
+    const arenaId = 1;
+    const count = 10n;
+    const expectedFee = DISCOUNTED_PIXEL_FEE * count; // 9 USDC for 10 pixels
+
+    await currencyToken.connect(player1).mint(expectedFee);
+    await currencyToken.connect(player1).approve(await pixelClash.getAddress(), expectedFee);
+
+    await fixture.purchasePixels(player1, arenaId, false, count, creator);
+
+    // Player spent exactly the discounted amount — no tokens left over.
+    expect(await currencyToken.balanceOf(await player1.getAddress())).to.equal(0n);
+
+    // Arena revenue equals the discounted amount actually received, not the nominal full price.
+    const arenaData = await pixelClash.getArenaData(arenaId);
+    expect(arenaData.revenue).to.equal(expectedFee);
+    expect(arenaData.balance).to.equal(expectedFee);
+  });
+
+  it("non-referred purchase continues to pay the full price", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const { player1, currencyToken, pixelClash } = fixture;
+    const arenaId = 1;
+    const count = 10n;
+    const fullFee = ONE_USDC * count;
+
+    await currencyToken.connect(player1).mint(fullFee);
+    await currencyToken.connect(player1).approve(await pixelClash.getAddress(), fullFee);
+
+    await fixture.purchasePixels(player1, arenaId, false, count, null);
+
+    expect(await currencyToken.balanceOf(await player1.getAddress())).to.equal(0n);
+    const arenaData = await pixelClash.getArenaData(arenaId);
+    expect(arenaData.revenue).to.equal(fullFee);
+    expect(arenaData.balance).to.equal(fullFee);
+  });
+
+  it("referral revenue is tracked at the discounted amount paid", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const { creator, player1, currencyToken, pixelClash } = fixture;
+    const arenaId = 1;
+    const count = 10n;
+    const discountedFee = DISCOUNTED_PIXEL_FEE * count;
+    const creatorAddress = await creator.getAddress();
+
+    await currencyToken.connect(player1).mint(discountedFee);
+    await currencyToken.connect(player1).approve(await pixelClash.getAddress(), discountedFee);
+
+    await fixture.purchasePixels(player1, arenaId, false, count, creator);
+
+    expect(await pixelClash.getReferralRevenueFrom(arenaId, creatorAddress)).to.equal(
+      discountedFee,
+    );
+
+    const topReferrers = await pixelClash.getTopReferrers(arenaId);
+    expect(topReferrers.length).to.equal(1);
+    expect(topReferrers[0].referrer).to.equal(creatorAddress);
+    expect(topReferrers[0].revenue).to.equal(discountedFee);
+  });
+
+  it("multiple referred purchases by different players accumulate on the same referrer", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const { creator, player1, player2, currencyToken, pixelClash } = fixture;
+    const arenaId = 1;
+    const count1 = 10n;
+    const count2 = 20n;
+    const fee1 = DISCOUNTED_PIXEL_FEE * count1;
+    const fee2 = DISCOUNTED_PIXEL_FEE * count2;
+    const creatorAddress = await creator.getAddress();
+
+    await currencyToken.connect(player1).mint(fee1);
+    await currencyToken.connect(player1).approve(await pixelClash.getAddress(), fee1);
+    await fixture.purchasePixels(player1, arenaId, false, count1, creator);
+
+    await currencyToken.connect(player2).mint(fee2);
+    await currencyToken.connect(player2).approve(await pixelClash.getAddress(), fee2);
+    await fixture.purchasePixels(player2, arenaId, true, count2, creator);
+
+    expect(await pixelClash.getReferralRevenueFrom(arenaId, creatorAddress)).to.equal(fee1 + fee2);
+
+    // Arena revenue is the sum of both discounted purchases.
+    const arenaData = await pixelClash.getArenaData(arenaId);
+    expect(arenaData.revenue).to.equal(fee1 + fee2);
+  });
+
+  it("getTopReferrers returns referrers sorted by revenue descending", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const { creator, player1, player2, currencyToken, pixelClash } = fixture;
+    const arenaId = 1;
+    const creatorAddress = await creator.getAddress();
+    const player1Address = await player1.getAddress();
+
+    // player1 buys 20 pixels referred by creator — the higher-revenue referrer.
+    const count1 = 20n;
+    const fee1 = DISCOUNTED_PIXEL_FEE * count1;
+    await currencyToken.connect(player1).mint(fee1);
+    await currencyToken.connect(player1).approve(await pixelClash.getAddress(), fee1);
+    await fixture.purchasePixels(player1, arenaId, false, count1, creator);
+
+    // player2 buys 5 pixels referred by player1 — the lower-revenue referrer.
+    const count2 = 5n;
+    const fee2 = DISCOUNTED_PIXEL_FEE * count2;
+    await currencyToken.connect(player2).mint(fee2);
+    await currencyToken.connect(player2).approve(await pixelClash.getAddress(), fee2);
+    await fixture.purchasePixels(player2, arenaId, true, count2, player1);
+
+    const topReferrers = await pixelClash.getTopReferrers(arenaId);
+    expect(topReferrers.length).to.equal(2);
+    // Rank 1: creator referred 20 pixels → more revenue.
+    expect(topReferrers[0].referrer).to.equal(creatorAddress);
+    expect(topReferrers[0].revenue).to.equal(fee1);
+    // Rank 2: player1 referred 5 pixels → less revenue.
+    expect(topReferrers[1].referrer).to.equal(player1Address);
+    expect(topReferrers[1].revenue).to.equal(fee2);
+  });
+
+  it("partial fill refund is calculated at the discounted per-pixel rate", async function () {
+    // Use a small arena (gridSize 20) so we can control the fill level cheaply.
+    const fixture = await Fixture.load();
+    const { creator, player1, player2, currencyToken, pixelClash } = fixture;
+
+    const smallGridSize = 20;
+    await currencyToken.connect(creator).mint(ARENA_CREATION_FEE);
+    await currencyToken.connect(creator).approve(await pixelClash.getAddress(), ARENA_CREATION_FEE);
+    await pixelClash.connect(creator).createArenaWithPermit(
+      {
+        teamAName: "Dogs",
+        teamALogo: "\u{1F436}",
+        teamALogoCid: ethers.ZeroHash,
+        teamAColor: 0xff0000,
+        teamBName: "Cats",
+        teamBLogo: "\u{1F431}",
+        teamBLogoCid: ethers.ZeroHash,
+        teamBColor: 0x0000ff,
+        gridSize: smallGridSize,
+        pixelFee: ONE_USDC,
+        maxDuration: STANDARD_MAX_DURATION,
+      },
+      [],
+      ethers.MaxUint256,
+      0,
+      ethers.ZeroHash,
+      ethers.ZeroHash,
+    );
+    const arenaId = 1;
+
+    // Initial pixels: 5 teamA + 5 teamB = 10 used, 10 available.
+    // player1 fills 8 pixels without a referral (teamA), leaving 2 available.
+    const fillCount = 8n;
+    const fillCost = ONE_USDC * fillCount;
+    await currencyToken.connect(player1).mint(fillCost);
+    await currencyToken.connect(player1).approve(await pixelClash.getAddress(), fillCost);
+    await fixture.purchasePixels(player1, arenaId, false, fillCount, null);
+
+    // player2 requests 10 pixels with a referrer — only 2 can actually be acquired.
+    const requestCount = 10n;
+    const approvedFee = DISCOUNTED_PIXEL_FEE * requestCount;
+    await currencyToken.connect(player2).mint(approvedFee);
+    await currencyToken.connect(player2).approve(await pixelClash.getAddress(), approvedFee);
+
+    const player2Address = await player2.getAddress();
+    const balanceBefore = await currencyToken.balanceOf(player2Address);
+    await fixture.purchasePixels(player2, arenaId, false, requestCount, creator);
+    const balanceAfter = await currencyToken.balanceOf(player2Address);
+
+    // Net deducted from player2 = 2 × DISCOUNTED_PIXEL_FEE (refund for 8 unacquired pixels).
+    const acquiredCount = 2n;
+    const netPayment = DISCOUNTED_PIXEL_FEE * acquiredCount;
+    expect(balanceBefore - balanceAfter).to.equal(netPayment);
+
+    // Arena should now be FULL.
+    const arenaData = await pixelClash.getArenaData(arenaId);
+    expect(arenaData.state).to.equal(ARENA_STATE_FULL);
+
+    // Total revenue = full-price fill + discounted partial fill.
+    expect(arenaData.revenue).to.equal(fillCost + netPayment);
+
+    // Referral revenue tracks only the 2 pixels that were actually acquired.
+    const creatorAddress = await creator.getAddress();
+    expect(await pixelClash.getReferralRevenueFrom(arenaId, creatorAddress)).to.equal(netPayment);
+  });
+
+  it("referred and non-referred purchases in the same arena are independent", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const { creator, player1, player2, currencyToken, pixelClash } = fixture;
+    const arenaId = 1;
+    const creatorAddress = await creator.getAddress();
+
+    // player1 buys 5 pixels without a referral → full price.
+    const nonReferralCount = 5n;
+    const nonReferralFee = ONE_USDC * nonReferralCount;
+    await currencyToken.connect(player1).mint(nonReferralFee);
+    await currencyToken.connect(player1).approve(await pixelClash.getAddress(), nonReferralFee);
+    await fixture.purchasePixels(player1, arenaId, false, nonReferralCount, null);
+
+    // player2 buys 5 pixels referred by creator → 10% off.
+    const referralCount = 5n;
+    const referralFee = DISCOUNTED_PIXEL_FEE * referralCount;
+    await currencyToken.connect(player2).mint(referralFee);
+    await currencyToken.connect(player2).approve(await pixelClash.getAddress(), referralFee);
+    await fixture.purchasePixels(player2, arenaId, true, referralCount, creator);
+
+    // Combined revenue = full price + discounted price.
+    const arenaData = await pixelClash.getArenaData(arenaId);
+    expect(arenaData.revenue).to.equal(nonReferralFee + referralFee);
+    expect(arenaData.balance).to.equal(nonReferralFee + referralFee);
+
+    // Referral revenue tracks only the referred purchase amount.
+    expect(await pixelClash.getReferralRevenueFrom(arenaId, creatorAddress)).to.equal(referralFee);
+
+    // No referral revenue was recorded for the address that made the non-referred purchase.
+    expect(await pixelClash.getReferralRevenueFrom(arenaId, await player1.getAddress())).to.equal(
+      0n,
+    );
   });
 });

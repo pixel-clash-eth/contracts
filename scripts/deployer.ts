@@ -50,7 +50,23 @@ export class Deployer {
     const pixelTokenAddress = requireEnv("PIXEL_TOKEN");
     const vrfWrapperAddress = requireEnv("CHAIN_LINK_VRF_WRAPPER");
     const swapRouterAddress = requireEnv("UNISWAP_V3_ROUTER");
-    const swapPoolAddress = requireEnv("UNISWAP_V3_POOL");
+    const uniswapV3FactoryAddress = requireEnv("UNISWAP_V3_FACTORY");
+    const swapPoolFee = parseInt(requireEnv("UNISWAP_V3_POOL_FEE"), 10);
+
+    const uniswapFactory = new ethers.Contract(
+      uniswapV3FactoryAddress,
+      ["function getPool(address,address,uint24) view returns (address)"],
+      ethers.provider,
+    );
+    const swapPoolAddress: string = await uniswapFactory.getPool(
+      currencyTokenAddress,
+      pixelTokenAddress,
+      swapPoolFee,
+    );
+    if (swapPoolAddress === ethers.ZeroAddress) {
+      throw new Error(`No Uniswap V3 pool found for the given tokens with fee ${swapPoolFee}`);
+    }
+    console.log(`SwapPool:      ${swapPoolAddress}`);
 
     const arenaMethods = await this.deploy("ArenaMethods");
     const arenaMethodsAddress = await arenaMethods.getAddress();

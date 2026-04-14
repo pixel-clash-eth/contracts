@@ -133,17 +133,6 @@ class Fixture {
       .connect(owner)
       .createAndSeed(currencyTokenAddress, pixelTokenAddress, POOL_LIQUIDITY);
 
-    const uniswapFactory = new ethers.Contract(
-      process.env.UNISWAP_V3_FACTORY!,
-      ["function getPool(address,address,uint24) view returns (address)"],
-      ethers.provider,
-    );
-    const poolAddress: string = await uniswapFactory.getPool(
-      currencyTokenAddress,
-      pixelTokenAddress,
-      500,
-    );
-
     // Fast-forward 30 min + 1 s so SwapGateway's pool.observe([1800, 0]) has enough history.
     await time.increase(1801);
 
@@ -151,10 +140,20 @@ class Fixture {
     process.env.CURRENCY_TOKEN = currencyTokenAddress;
     process.env.PIXEL_TOKEN = pixelTokenAddress;
     process.env.CHAIN_LINK_VRF_WRAPPER = await mockVRFWrapper.getAddress();
-    process.env.UNISWAP_V3_POOL = poolAddress;
 
     const pixelClash = await deployer.deployPixelClash();
     const swapGateway = await ethers.getContractAt("SwapGateway", await pixelClash.swapGateway());
+
+    const uniswapFactory = new ethers.Contract(
+      process.env.UNISWAP_V3_FACTORY!,
+      ["function getPool(address,address,uint24) view returns (address)"],
+      ethers.provider,
+    );
+    const swapPoolAddress: string = await uniswapFactory.getPool(
+      currencyTokenAddress,
+      pixelTokenAddress,
+      parseInt(process.env.UNISWAP_V3_POOL_FEE!, 10),
+    );
 
     return new Fixture(
       owner,
@@ -165,6 +164,7 @@ class Fixture {
       pixelToken,
       pixelClash,
       swapGateway,
+      swapPoolAddress,
     );
   }
 
@@ -181,6 +181,7 @@ class Fixture {
     private readonly _pixelToken: ERC20Burnable,
     private readonly _pixelClash: PixelClash,
     private readonly _swapGateway: SwapGateway,
+    private readonly _swapPoolAddress: string,
   ) {}
 
   get owner() {
@@ -221,6 +222,10 @@ class Fixture {
 
   get swapGateway() {
     return this._swapGateway;
+  }
+
+  get swapPoolAddress() {
+    return this._swapPoolAddress;
   }
 
   public async createTestArena(): Promise<void> {
@@ -282,7 +287,7 @@ class Fixture {
 
 describe("PixelClash", function () {
   it("initial state", async function () {
-    const { owner, creator, currencyToken, pixelToken, pixelClash, swapGateway } =
+    const { owner, creator, currencyToken, pixelToken, pixelClash, swapGateway, swapPoolAddress } =
       await Fixture.load();
     const ownerAddress = await owner.getAddress();
     expect(await pixelClash.hasRole(await pixelClash.DEFAULT_ADMIN_ROLE(), ownerAddress)).to.be
@@ -310,7 +315,7 @@ describe("PixelClash", function () {
     expect(await swapGateway.inputToken()).to.equal(await currencyToken.getAddress());
     expect(await swapGateway.targetToken()).to.equal(await pixelToken.getAddress());
     expect(await swapGateway.swapRouter()).to.equal(process.env.UNISWAP_V3_ROUTER);
-    expect(await swapGateway.swapPool()).to.equal(process.env.UNISWAP_V3_POOL);
+    expect(await swapGateway.swapPool()).to.equal(swapPoolAddress);
   });
 
   it("create arena", async function () {

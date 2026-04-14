@@ -131,7 +131,12 @@ class Fixture {
     await pixelToken.connect(owner).approve(await poolHelper.getAddress(), POOL_LIQUIDITY);
     await poolHelper
       .connect(owner)
-      .createAndSeed(currencyTokenAddress, pixelTokenAddress, POOL_LIQUIDITY);
+      .createAndSeed(
+        currencyTokenAddress,
+        pixelTokenAddress,
+        parseInt(process.env.UNISWAP_V3_POOL_FEE!, 10),
+        POOL_LIQUIDITY,
+      );
 
     // Fast-forward 30 min + 1 s so SwapGateway's pool.observe([1800, 0]) has enough history.
     await time.increase(1801);

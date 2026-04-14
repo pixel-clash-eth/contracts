@@ -42,7 +42,7 @@ const config: HardhatUserConfig = {
     },
     localhost: {
       chainId: 31337,
-      url: "https://localhost:8545",
+      url: "http://localhost:8545",
       accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
     },
     mainnet: {

@@ -30,11 +30,6 @@ contract PoolCreatorHelper {
   /// sqrt(1) * 2^96 — encodes a 1:1 price between two same-decimal tokens.
   uint160 private constant SQRT_PRICE_1_1 = 79228162514264337593543950336;
 
-  uint24 private constant FEE = 500; // 0.05 %
-  /// Full-range ticks for fee-500 pools (tickSpacing = 10).
-  int24 private constant TICK_LOWER = -887270;
-  int24 private constant TICK_UPPER = 887270;
-
   IUniswapV3Factory private immutable _factory;
   IPositionManager private immutable _positionManager;
 
@@ -43,17 +38,27 @@ contract PoolCreatorHelper {
     _positionManager = positionManager_;
   }
 
-  /// @notice Creates a fee-500 Uniswap V3 pool for (tokenA, tokenB), initialises it at a 1:1
-  ///   price, and seeds it with `liquidityAmount` of each token drawn from the caller.
+  /// @notice Creates a Uniswap V3 pool for (tokenA, tokenB) at the given fee tier, initialises
+  ///   it at a 1:1 price, and seeds it with `liquidityAmount` of each token drawn from the caller.
   /// @dev The caller must have approved this contract to spend `liquidityAmount` of both tokens.
+  ///   Full-range ticks are derived from the pool's tick spacing, so any standard fee tier works.
+  /// @param tokenA The address of the first token in the pair.
+  /// @param tokenB The address of the second token in the pair.
+  /// @param fee The Uniswap V3 fee tier for the pool (e.g. 500 or 3000).
+  /// @param liquidityAmount The amount of each token to deposit as initial liquidity.
   /// @return pool The address of the newly created pool.
   function createAndSeed(
     address tokenA,
     address tokenB,
+    uint24 fee,
     uint256 liquidityAmount
   ) external returns (address pool) {
-    pool = _factory.createPool(tokenA, tokenB, FEE);
+    pool = _factory.createPool(tokenA, tokenB, fee);
     IUniswapV3Pool(pool).initialize(SQRT_PRICE_1_1);
+
+    int24 tickSpacing = IUniswapV3Pool(pool).tickSpacing();
+    int24 tickLower = -(887272 / tickSpacing) * tickSpacing;
+    int24 tickUpper = (887272 / tickSpacing) * tickSpacing;
 
     (address token0, address token1) = tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
 
@@ -66,9 +71,9 @@ contract PoolCreatorHelper {
       IPositionManager.MintParams({
         token0: token0,
         token1: token1,
-        fee: FEE,
-        tickLower: TICK_LOWER,
-        tickUpper: TICK_UPPER,
+        fee: fee,
+        tickLower: tickLower,
+        tickUpper: tickUpper,
         amount0Desired: liquidityAmount,
         amount1Desired: liquidityAmount,
         amount0Min: 0,

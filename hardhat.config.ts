@@ -60,6 +60,9 @@ const config: HardhatUserConfig = {
     alphaSort: false,
     runOnCompile: false,
   },
+  etherscan: {
+    apiKey: process.env.ETHERSCAN_API_KEY!,
+  },
 };
 
 export default config;

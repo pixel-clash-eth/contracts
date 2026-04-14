@@ -302,6 +302,7 @@ describe("PixelClash", function () {
       pixelClash,
       "InvalidArenaId",
     );
+    expect(await pixelClash.getArenaCount()).to.equal(0);
     expect(await pixelClash.getArenasByTag("animals", 0, 10)).to.deep.equal([]);
     expect(await pixelClash.getArenasByTag("dogs", 0, 10)).to.deep.equal([]);
     expect(await pixelClash.getUserArenas(await owner.getAddress(), 0, 10)).to.deep.equal([]);
@@ -363,6 +364,7 @@ describe("PixelClash", function () {
 
     expect(await pixelClash.protocolRevenue()).to.equal(ARENA_CREATION_FEE);
 
+    expect(await pixelClash.getArenaCount()).to.equal(1);
     expect(await pixelClash.getArenasByTag("animals", 0, 10)).to.deep.equal([1n]);
     expect(await pixelClash.getArenasByTag("dogs", 0, 10)).to.deep.equal([1n]);
     expect(await pixelClash.getArenasByTag("cats", 0, 10)).to.deep.equal([1n]);
@@ -405,6 +407,7 @@ describe("PixelClash", function () {
         .createArenaWithPermit(params, [], ethers.MaxUint256, 0, ethers.ZeroHash, ethers.ZeroHash);
     }
 
+    expect(await pixelClash.getArenaCount()).to.equal(3);
     expect(await pixelClash.getUserArenas(creatorAddress, 0, 10)).to.deep.equal([3n, 2n, 1n]);
     expect(await pixelClash.getUserArenas(creatorAddress, 0, 2)).to.deep.equal([3n, 2n]);
     expect(await pixelClash.getUserArenas(creatorAddress, 1, 2)).to.deep.equal([2n, 1n]);
@@ -451,6 +454,7 @@ describe("PixelClash", function () {
       .connect(player1)
       .createArenaWithPermit(params, [], ethers.MaxUint256, 0, ethers.ZeroHash, ethers.ZeroHash);
 
+    expect(await pixelClash.getArenaCount()).to.equal(3);
     expect(await pixelClash.getUserArenas(creatorAddress, 0, 10)).to.deep.equal([2n, 1n]);
     expect(await pixelClash.getUserArenas(player1Address, 0, 10)).to.deep.equal([3n]);
     expect(await pixelClash.getUserArenas(ethers.ZeroAddress, 0, 10)).to.deep.equal([]);

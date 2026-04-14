@@ -233,6 +233,12 @@ contract PixelClash is
     }
   }
 
+  /// @notice Returns the total number of arenas that have been created.
+  /// @return The number of arenas.
+  function getArenaCount() public view returns (uint256) {
+    return arenas.length - 1;
+  }
+
   /// @notice Retrieves the state of the given arena.
   /// @param arenaId The arena ID.
   /// @return An `ArenaData` containing most of the state of the arena.

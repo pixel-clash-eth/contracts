@@ -1704,4 +1704,161 @@ describe("PixelClash", function () {
       0n,
     );
   });
+
+  it("sponsor prize equals 5% of revenue when the winning pixel was referred", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const { creator, player1, currencyToken, pixelClash, mockVrfCoordinator } = fixture;
+    const arenaId = 1;
+
+    // player1 buys 100 team-A pixels with creator as referrer
+    const pixelCount = 100n;
+    const pixelCost = DISCOUNTED_PIXEL_FEE * pixelCount;
+    await currencyToken.connect(player1).mint(pixelCost);
+    await currencyToken.connect(player1).approve(await pixelClash.getAddress(), pixelCost);
+    await fixture.purchasePixels(player1, arenaId, false, pixelCount, creator);
+
+    await time.increase(STANDARD_MAX_DURATION + 1n);
+    expect((await pixelClash.getArenaData(arenaId)).state).to.equal(ARENA_STATE_TIMED_OUT);
+
+    const drawPrice = ((await pixelClash.getDrawPrice()) * 110n) / 100n;
+    const drawReceipt = await (
+      await pixelClash.connect(player1).draw(arenaId, { value: drawPrice })
+    ).wait();
+
+    const vrfRequestId: bigint = drawReceipt!.logs
+      .map((log) => {
+        try {
+          return pixelClash.interface.parseLog(log);
+        } catch {
+          return null;
+        }
+      })
+      .find((log) => log?.name === "VRFRequest")!.args.vrfRequestId;
+
+    await mine(10);
+
+    const vrfConsumerContract = await ethers.getContractAt(
+      "VRFConsumer",
+      await pixelClash.vrfConsumer(),
+    );
+    const vrfWrapperAddress = await vrfConsumerContract.i_vrfV2PlusWrapper();
+
+    // teamACount = 5 (creator, no referrer) + 100 (player1, referrer=creator) = 105
+    // teamBCount = 5 (creator, no referrer); acquiredPixels = 110
+    // random=5 → winner = 5 % 110 = 5 → teamA pixel 5 → player1's range, referrer=creator
+    await expect(
+      mockVrfCoordinator.fulfillRandomWordsWithOverride(vrfRequestId, vrfWrapperAddress, [5n]),
+    )
+      .to.emit(pixelClash, "ArenaClosure")
+      .withArgs(arenaId, vrfRequestId, 5n);
+
+    const arenaData = await pixelClash.getArenaData(arenaId);
+    expect(arenaData.state).to.equal(ARENA_STATE_DRAWN);
+    expect(arenaData.winner).to.equal(5n);
+
+    const totalRevenue = pixelCost;
+    const expectedSponsorPrize = (totalRevenue * 5n) / 100n;
+
+    const allPrizes = await pixelClash.getAllPrizes(arenaId);
+    expect(allPrizes.sponsorPrize).to.equal(expectedSponsorPrize);
+
+    const creatorAddress = await creator.getAddress();
+    const player1Address = await player1.getAddress();
+
+    // creator referred the winning pixel → gets the sponsor prize
+    const creatorPrizes = await pixelClash.getPrizesFor(arenaId, creatorAddress);
+    expect(creatorPrizes.sponsorPrize).to.equal(expectedSponsorPrize);
+
+    // player1 owns the winning pixel but is not its referrer → no sponsor prize
+    const player1Prizes = await pixelClash.getPrizesFor(arenaId, player1Address);
+    expect(player1Prizes.sponsorPrize).to.equal(0n);
+  });
+
+  it("top 3 referral prizes are 9%, 4%, and 2% of revenue", async function () {
+    const fixture = await Fixture.load();
+    await fixture.createTestArena();
+
+    const { owner, player1, player2, currencyToken, pixelClash, mockVrfCoordinator } = fixture;
+    const arenaId = 1;
+    const allSigners = await ethers.getSigners();
+    const referrer1 = allSigners[4]; // will rank #1 by referral revenue
+    const referrer2 = allSigners[5]; // will rank #2
+    const referrer3 = allSigners[6]; // will rank #3
+
+    // player1 buys 300 team-A pixels with referrer1 → highest referral revenue
+    const count1 = 300n;
+    const cost1 = DISCOUNTED_PIXEL_FEE * count1;
+    await currencyToken.connect(player1).mint(cost1);
+    await currencyToken.connect(player1).approve(await pixelClash.getAddress(), cost1);
+    await fixture.purchasePixels(player1, arenaId, false, count1, referrer1);
+
+    // player2 buys 200 team-B pixels with referrer2 → second highest
+    const count2 = 200n;
+    const cost2 = DISCOUNTED_PIXEL_FEE * count2;
+    await currencyToken.connect(player2).mint(cost2);
+    await currencyToken.connect(player2).approve(await pixelClash.getAddress(), cost2);
+    await fixture.purchasePixels(player2, arenaId, true, count2, referrer2);
+
+    // owner buys 100 team-A pixels with referrer3 → third highest
+    const count3 = 100n;
+    const cost3 = DISCOUNTED_PIXEL_FEE * count3;
+    await currencyToken.connect(owner).mint(cost3);
+    await currencyToken.connect(owner).approve(await pixelClash.getAddress(), cost3);
+    await fixture.purchasePixels(owner, arenaId, false, count3, referrer3);
+
+    await time.increase(STANDARD_MAX_DURATION + 1n);
+
+    const drawPrice = ((await pixelClash.getDrawPrice()) * 110n) / 100n;
+    const drawReceipt = await (
+      await pixelClash.connect(player1).draw(arenaId, { value: drawPrice })
+    ).wait();
+
+    const vrfRequestId: bigint = drawReceipt!.logs
+      .map((log) => {
+        try {
+          return pixelClash.interface.parseLog(log);
+        } catch {
+          return null;
+        }
+      })
+      .find((log) => log?.name === "VRFRequest")!.args.vrfRequestId;
+
+    await mine(10);
+
+    const vrfConsumerContract = await ethers.getContractAt(
+      "VRFConsumer",
+      await pixelClash.vrfConsumer(),
+    );
+    const vrfWrapperAddress = await vrfConsumerContract.i_vrfV2PlusWrapper();
+
+    // teamACount = 5 (creator) + 300 (player1) + 100 (owner) = 405
+    // teamBCount = 5 (creator) + 200 (player2) = 205; acquiredPixels = 610
+    // random=0 → winner = 0 % 610 = 0 → teamA pixel 0 → creator's range, no referrer
+    await expect(
+      mockVrfCoordinator.fulfillRandomWordsWithOverride(vrfRequestId, vrfWrapperAddress, [0n]),
+    )
+      .to.emit(pixelClash, "ArenaClosure")
+      .withArgs(arenaId, vrfRequestId, 0n);
+
+    expect((await pixelClash.getArenaData(arenaId)).state).to.equal(ARENA_STATE_DRAWN);
+
+    const totalRevenue = cost1 + cost2 + cost3;
+    const expectedPrize1 = (totalRevenue * 9n) / 100n;
+    const expectedPrize2 = (totalRevenue * 4n) / 100n;
+    const expectedPrize3 = (totalRevenue * 2n) / 100n;
+
+    const allPrizes = await pixelClash.getAllPrizes(arenaId);
+    expect(allPrizes.topReferralPrize).to.equal(expectedPrize1 + expectedPrize2 + expectedPrize3);
+
+    const referrer1Prizes = await pixelClash.getPrizesFor(arenaId, await referrer1.getAddress());
+    expect(referrer1Prizes.topReferralPrize).to.equal(expectedPrize1);
+
+    const referrer2Prizes = await pixelClash.getPrizesFor(arenaId, await referrer2.getAddress());
+    expect(referrer2Prizes.topReferralPrize).to.equal(expectedPrize2);
+
+    const referrer3Prizes = await pixelClash.getPrizesFor(arenaId, await referrer3.getAddress());
+    expect(referrer3Prizes.topReferralPrize).to.equal(expectedPrize3);
+  });
 });

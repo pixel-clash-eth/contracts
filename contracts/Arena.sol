@@ -17,10 +17,10 @@ uint256 constant ARENA_STATE_DRAWN = 4;
 // up to 95% of the revenue, with the remaining 5% being the protocol fee.
 uint256 constant WINNER_PRIZE = 45;
 uint256 constant TEAM_PRIZE = 25;
-uint256 constant SPONSOR_PRIZE = 10;
-uint256 constant TOP_REFERRAL_PRIZE_1 = 6;
-uint256 constant TOP_REFERRAL_PRIZE_2 = 3;
-uint256 constant TOP_REFERRAL_PRIZE_3 = 1;
+uint256 constant SPONSOR_PRIZE = 5;
+uint256 constant TOP_REFERRAL_PRIZE_1 = 9;
+uint256 constant TOP_REFERRAL_PRIZE_2 = 4;
+uint256 constant TOP_REFERRAL_PRIZE_3 = 2;
 uint256 constant ARENA_OWNER_PRIZE = 5;
 
 /// @notice A range of pixels in an arena.

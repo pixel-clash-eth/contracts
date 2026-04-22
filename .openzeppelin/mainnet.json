@@ -1,0 +1,555 @@
+{
+  "manifestVersion": "3.2",
+  "proxies": [
+    {
+      "address": "0x510916578fcb5D8c7E84B65E2E325b3605aEb58B",
+      "txHash": "0x40ef9ca0819f95733b91cbc02f8b52c0c1819d87077f6818e39d631047684427",
+      "kind": "uups"
+    }
+  ],
+  "impls": {
+    "8cd88cbaa3c856c75362e22d7c2a89748888d6b7d9e40c9bfbc88d6989fe2bb6": {
+      "address": "0x22DD7b06d6D2b5c24Fb14f297eC83FB96cEc99A3",
+      "txHash": "0x7413d0102ac3d97102a78ab43b47947beac4ae15fbe51846a5e0201a1b0753be",
+      "layout": {
+        "solcVersion": "0.8.28",
+        "storage": [
+          {
+            "label": "currencyToken",
+            "offset": 0,
+            "slot": "0",
+            "type": "t_contract(ICurrencyToken)23076",
+            "contract": "PixelClash",
+            "src": "contracts/PixelClash.sol:122"
+          },
+          {
+            "label": "vrfConsumer",
+            "offset": 0,
+            "slot": "1",
+            "type": "t_contract(VRFConsumer)25035",
+            "contract": "PixelClash",
+            "src": "contracts/PixelClash.sol:125"
+          },
+          {
+            "label": "swapGateway",
+            "offset": 0,
+            "slot": "2",
+            "type": "t_contract(SwapGateway)24925",
+            "contract": "PixelClash",
+            "src": "contracts/PixelClash.sol:128"
+          },
+          {
+            "label": "arenas",
+            "offset": 0,
+            "slot": "3",
+            "type": "t_array(t_struct(Arena)20766_storage)dyn_storage",
+            "contract": "PixelClash",
+            "src": "contracts/PixelClash.sol:131"
+          },
+          {
+            "label": "_arenaIdsByOwner",
+            "offset": 0,
+            "slot": "4",
+            "type": "t_mapping(t_address,t_array(t_uint256)dyn_storage)",
+            "contract": "PixelClash",
+            "src": "contracts/PixelClash.sol:134"
+          },
+          {
+            "label": "_arenaIdsByTag",
+            "offset": 0,
+            "slot": "5",
+            "type": "t_mapping(t_string_memory_ptr,t_array(t_uint256)dyn_storage)",
+            "contract": "PixelClash",
+            "src": "contracts/PixelClash.sol:137"
+          },
+          {
+            "label": "_arenaIdsByPlayer",
+            "offset": 0,
+            "slot": "6",
+            "type": "t_mapping(t_address,t_struct(UintSet)18304_storage)",
+            "contract": "PixelClash",
+            "src": "contracts/PixelClash.sol:140"
+          },
+          {
+            "label": "protocolRevenue",
+            "offset": 0,
+            "slot": "7",
+            "type": "t_uint256",
+            "contract": "PixelClash",
+            "src": "contracts/PixelClash.sol:143"
+          },
+          {
+            "label": "maxSlippageNumerator",
+            "offset": 0,
+            "slot": "8",
+            "type": "t_uint256",
+            "contract": "PixelClash",
+            "src": "contracts/PixelClash.sol:148"
+          },
+          {
+            "label": "maxSlippageDenominator",
+            "offset": 0,
+            "slot": "9",
+            "type": "t_uint256",
+            "contract": "PixelClash",
+            "src": "contracts/PixelClash.sol:153"
+          },
+          {
+            "label": "arenaIdsByVrfRequestId",
+            "offset": 0,
+            "slot": "10",
+            "type": "t_mapping(t_uint256,t_uint256)",
+            "contract": "PixelClash",
+            "src": "contracts/PixelClash.sol:157"
+          }
+        ],
+        "types": {
+          "t_address": {
+            "label": "address",
+            "numberOfBytes": "20"
+          },
+          "t_bool": {
+            "label": "bool",
+            "numberOfBytes": "1"
+          },
+          "t_bytes32": {
+            "label": "bytes32",
+            "numberOfBytes": "32"
+          },
+          "t_mapping(t_address,t_bool)": {
+            "label": "mapping(address => bool)",
+            "numberOfBytes": "32"
+          },
+          "t_mapping(t_bytes32,t_struct(RoleData)1384_storage)": {
+            "label": "mapping(bytes32 => struct AccessControlUpgradeable.RoleData)",
+            "numberOfBytes": "32"
+          },
+          "t_struct(AccessControlStorage)1394_storage": {
+            "label": "struct AccessControlUpgradeable.AccessControlStorage",
+            "members": [
+              {
+                "label": "_roles",
+                "type": "t_mapping(t_bytes32,t_struct(RoleData)1384_storage)",
+                "offset": 0,
+                "slot": "0"
+              }
+            ],
+            "numberOfBytes": "32"
+          },
+          "t_struct(InitializableStorage)1985_storage": {
+            "label": "struct Initializable.InitializableStorage",
+            "members": [
+              {
+                "label": "_initialized",
+                "type": "t_uint64",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "label": "_initializing",
+                "type": "t_bool",
+                "offset": 8,
+                "slot": "0"
+              }
+            ],
+            "numberOfBytes": "32"
+          },
+          "t_struct(PausableStorage)1547_storage": {
+            "label": "struct PausableUpgradeable.PausableStorage",
+            "members": [
+              {
+                "label": "_paused",
+                "type": "t_bool",
+                "offset": 0,
+                "slot": "0"
+              }
+            ],
+            "numberOfBytes": "32"
+          },
+          "t_struct(RoleData)1384_storage": {
+            "label": "struct AccessControlUpgradeable.RoleData",
+            "members": [
+              {
+                "label": "hasRole",
+                "type": "t_mapping(t_address,t_bool)",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "label": "adminRole",
+                "type": "t_bytes32",
+                "offset": 0,
+                "slot": "1"
+              }
+            ],
+            "numberOfBytes": "64"
+          },
+          "t_uint64": {
+            "label": "uint64",
+            "numberOfBytes": "8"
+          },
+          "t_array(t_bytes32)dyn_storage": {
+            "label": "bytes32[]",
+            "numberOfBytes": "32"
+          },
+          "t_array(t_struct(Arena)20766_storage)dyn_storage": {
+            "label": "struct Arena[]",
+            "numberOfBytes": "32"
+          },
+          "t_array(t_struct(Range)20685_storage)dyn_storage": {
+            "label": "struct Range[]",
+            "numberOfBytes": "32"
+          },
+          "t_array(t_struct(ReferralRevenue)22563_storage)dyn_storage": {
+            "label": "struct ReferralRevenue[]",
+            "numberOfBytes": "32"
+          },
+          "t_array(t_uint256)dyn_storage": {
+            "label": "uint256[]",
+            "numberOfBytes": "32"
+          },
+          "t_contract(ICurrencyToken)23076": {
+            "label": "contract ICurrencyToken",
+            "numberOfBytes": "20"
+          },
+          "t_contract(SwapGateway)24925": {
+            "label": "contract SwapGateway",
+            "numberOfBytes": "20"
+          },
+          "t_contract(VRFConsumer)25035": {
+            "label": "contract VRFConsumer",
+            "numberOfBytes": "20"
+          },
+          "t_int256": {
+            "label": "int256",
+            "numberOfBytes": "32"
+          },
+          "t_mapping(t_address,t_array(t_uint256)dyn_storage)": {
+            "label": "mapping(address => uint256[])",
+            "numberOfBytes": "32"
+          },
+          "t_mapping(t_address,t_struct(UintSet)18304_storage)": {
+            "label": "mapping(address => struct EnumerableSet.UintSet)",
+            "numberOfBytes": "32"
+          },
+          "t_mapping(t_address,t_uint256)": {
+            "label": "mapping(address => uint256)",
+            "numberOfBytes": "32"
+          },
+          "t_mapping(t_address,t_uint64)": {
+            "label": "mapping(address => uint64)",
+            "numberOfBytes": "32"
+          },
+          "t_mapping(t_bytes32,t_uint256)": {
+            "label": "mapping(bytes32 => uint256)",
+            "numberOfBytes": "32"
+          },
+          "t_mapping(t_string_memory_ptr,t_array(t_uint256)dyn_storage)": {
+            "label": "mapping(string => uint256[])",
+            "numberOfBytes": "32"
+          },
+          "t_mapping(t_uint256,t_uint256)": {
+            "label": "mapping(uint256 => uint256)",
+            "numberOfBytes": "32"
+          },
+          "t_string_memory_ptr": {
+            "label": "string",
+            "numberOfBytes": "32"
+          },
+          "t_string_storage": {
+            "label": "string",
+            "numberOfBytes": "32"
+          },
+          "t_struct(Arena)20766_storage": {
+            "label": "struct Arena",
+            "members": [
+              {
+                "label": "creationTimestamp",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "label": "owner",
+                "type": "t_address",
+                "offset": 0,
+                "slot": "1"
+              },
+              {
+                "label": "teamAName",
+                "type": "t_string_storage",
+                "offset": 0,
+                "slot": "2"
+              },
+              {
+                "label": "teamALogo",
+                "type": "t_string_storage",
+                "offset": 0,
+                "slot": "3"
+              },
+              {
+                "label": "teamALogoCid",
+                "type": "t_bytes32",
+                "offset": 0,
+                "slot": "4"
+              },
+              {
+                "label": "teamAColor",
+                "type": "t_uint32",
+                "offset": 0,
+                "slot": "5"
+              },
+              {
+                "label": "teamBName",
+                "type": "t_string_storage",
+                "offset": 0,
+                "slot": "6"
+              },
+              {
+                "label": "teamBLogo",
+                "type": "t_string_storage",
+                "offset": 0,
+                "slot": "7"
+              },
+              {
+                "label": "teamBLogoCid",
+                "type": "t_bytes32",
+                "offset": 0,
+                "slot": "8"
+              },
+              {
+                "label": "teamBColor",
+                "type": "t_uint32",
+                "offset": 0,
+                "slot": "9"
+              },
+              {
+                "label": "gridSize",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "10"
+              },
+              {
+                "label": "pixelFee",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "11"
+              },
+              {
+                "label": "maxDuration",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "12"
+              },
+              {
+                "label": "teamA",
+                "type": "t_array(t_struct(Range)20685_storage)dyn_storage",
+                "offset": 0,
+                "slot": "13"
+              },
+              {
+                "label": "teamB",
+                "type": "t_array(t_struct(Range)20685_storage)dyn_storage",
+                "offset": 0,
+                "slot": "14"
+              },
+              {
+                "label": "teamAShares",
+                "type": "t_mapping(t_address,t_uint256)",
+                "offset": 0,
+                "slot": "15"
+              },
+              {
+                "label": "teamBShares",
+                "type": "t_mapping(t_address,t_uint256)",
+                "offset": 0,
+                "slot": "16"
+              },
+              {
+                "label": "referrals",
+                "type": "t_struct(ReferralHeap)22575_storage",
+                "offset": 0,
+                "slot": "17"
+              },
+              {
+                "label": "revenue",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "19"
+              },
+              {
+                "label": "balance",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "20"
+              },
+              {
+                "label": "vrfRequestId",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "21"
+              },
+              {
+                "label": "winner",
+                "type": "t_int256",
+                "offset": 0,
+                "slot": "22"
+              },
+              {
+                "label": "withdrawals",
+                "type": "t_mapping(t_address,t_uint256)",
+                "offset": 0,
+                "slot": "23"
+              }
+            ],
+            "numberOfBytes": "768"
+          },
+          "t_struct(Range)20685_storage": {
+            "label": "struct Range",
+            "members": [
+              {
+                "label": "owner",
+                "type": "t_address",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "label": "offset",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "1"
+              },
+              {
+                "label": "length",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "2"
+              },
+              {
+                "label": "referrer",
+                "type": "t_address",
+                "offset": 0,
+                "slot": "3"
+              }
+            ],
+            "numberOfBytes": "128"
+          },
+          "t_struct(ReferralHeap)22575_storage": {
+            "label": "struct ReferralHeap",
+            "members": [
+              {
+                "label": "queue",
+                "type": "t_array(t_struct(ReferralRevenue)22563_storage)dyn_storage",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "label": "indices",
+                "type": "t_mapping(t_address,t_uint64)",
+                "offset": 0,
+                "slot": "1"
+              }
+            ],
+            "numberOfBytes": "64"
+          },
+          "t_struct(ReferralRevenue)22563_storage": {
+            "label": "struct ReferralRevenue",
+            "members": [
+              {
+                "label": "referrer",
+                "type": "t_address",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "label": "revenue",
+                "type": "t_uint256",
+                "offset": 0,
+                "slot": "1"
+              }
+            ],
+            "numberOfBytes": "64"
+          },
+          "t_struct(Set)17430_storage": {
+            "label": "struct EnumerableSet.Set",
+            "members": [
+              {
+                "label": "_values",
+                "type": "t_array(t_bytes32)dyn_storage",
+                "offset": 0,
+                "slot": "0"
+              },
+              {
+                "label": "_positions",
+                "type": "t_mapping(t_bytes32,t_uint256)",
+                "offset": 0,
+                "slot": "1"
+              }
+            ],
+            "numberOfBytes": "64"
+          },
+          "t_struct(UintSet)18304_storage": {
+            "label": "struct EnumerableSet.UintSet",
+            "members": [
+              {
+                "label": "_inner",
+                "type": "t_struct(Set)17430_storage",
+                "offset": 0,
+                "slot": "0"
+              }
+            ],
+            "numberOfBytes": "64"
+          },
+          "t_uint256": {
+            "label": "uint256",
+            "numberOfBytes": "32"
+          },
+          "t_uint32": {
+            "label": "uint32",
+            "numberOfBytes": "4"
+          }
+        },
+        "namespaces": {
+          "erc7201:openzeppelin.storage.Pausable": [
+            {
+              "contract": "PausableUpgradeable",
+              "label": "_paused",
+              "type": "t_bool",
+              "src": "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol:21",
+              "offset": 0,
+              "slot": "0"
+            }
+          ],
+          "erc7201:openzeppelin.storage.AccessControl": [
+            {
+              "contract": "AccessControlUpgradeable",
+              "label": "_roles",
+              "type": "t_mapping(t_bytes32,t_struct(RoleData)1384_storage)",
+              "src": "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol:61",
+              "offset": 0,
+              "slot": "0"
+            }
+          ],
+          "erc7201:openzeppelin.storage.Initializable": [
+            {
+              "contract": "Initializable",
+              "label": "_initialized",
+              "type": "t_uint64",
+              "src": "@openzeppelin/contracts/proxy/utils/Initializable.sol:69",
+              "offset": 0,
+              "slot": "0"
+            },
+            {
+              "contract": "Initializable",
+              "label": "_initializing",
+              "type": "t_bool",
+              "src": "@openzeppelin/contracts/proxy/utils/Initializable.sol:73",
+              "offset": 8,
+              "slot": "0"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

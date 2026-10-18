@@ -65,10 +65,15 @@ async function main() {
 
   const arenaMethods = await ethers.deployContract("ArenaMethods");
   await arenaMethods.waitForDeployment();
+  const tagMethods = await ethers.deployContract("TagMethods");
+  await tagMethods.waitForDeployment();
   const gateway = await ethers.deployContract("SwapGateway", [await currency.getAddress(), await pixel.getAddress(), routerAddress, pool]);
   await gateway.waitForDeployment();
   const pixelClashFactory = await ethers.getContractFactory("PixelClash", {
-    libraries: { ArenaMethods: await arenaMethods.getAddress() },
+    libraries: {
+      ArenaMethods: await arenaMethods.getAddress(),
+      TagMethods: await tagMethods.getAddress(),
+    },
   });
   const pixelClash = await upgrades.deployProxy(
     pixelClashFactory,
@@ -85,6 +90,7 @@ async function main() {
     currencyToken: await currency.getAddress(),
     pixelToken: await pixel.getAddress(),
     arenaMethods: await arenaMethods.getAddress(),
+    tagMethods: await tagMethods.getAddress(),
     swapGateway: await gateway.getAddress(),
     vrfCoordinator: await coordinator.getAddress(),
     vrfWrapper: await wrapper.getAddress(),

@@ -84,7 +84,8 @@ async function main() {
   );
   if ((await pixelClash.getArenaData(1n)).state !== 1n) throw new Error("Arena did not become FULL");
 
-  await pixelClash.connect(creator).draw(1n, { value: await pixelClash.getDrawPrice() });
+  // The VRF price depends on the transaction gas price; the contract refunds any excess.
+  await pixelClash.connect(creator).draw(1n, { value: ((await pixelClash.getDrawPrice()) * 11n) / 10n });
   const requestId = (await pixelClash.getArenaData(1n)).vrfRequestId;
   await network.provider.send("hardhat_mine", ["0xa"]);
   const coordinator = await ethers.getContractAt("MockVRFCoordinator", manifest.vrfCoordinator);

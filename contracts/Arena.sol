@@ -3,8 +3,14 @@ pragma solidity ^0.8.28;
 
 import {ReferralHeap, ReferralHeapMethods, ReferralRevenue} from "./Heap.sol";
 
-// Maximum arena grid size.
-uint256 constant MAX_GRID_SIZE = 1e19;
+// Arena grid size. The frontend renders a fixed 100 x 100 grid.
+uint256 constant GRID_SIZE = 10_000;
+
+// Upper bounds on user-provided arena fields. They keep storage writes and the response size of
+// paginated views like `getArenas` bounded, so a single arena can't make a whole page unreadable.
+uint256 constant MAX_TEAM_NAME_LENGTH = 64;
+uint256 constant MAX_TEAM_LOGO_LENGTH = 64;
+uint256 constant MAX_DURATION = 365 days;
 
 // Arena states.
 uint256 constant ARENA_STATE_OPEN = 0;
@@ -167,14 +173,17 @@ library ArenaMethods {
   ) external {
     if (
       (bytes(params.teamAName).length == 0) ||
+      (bytes(params.teamAName).length > MAX_TEAM_NAME_LENGTH) ||
       (bytes(params.teamALogo).length == 0) ||
+      (bytes(params.teamALogo).length > MAX_TEAM_LOGO_LENGTH) ||
       (bytes(params.teamBName).length == 0) ||
+      (bytes(params.teamBName).length > MAX_TEAM_NAME_LENGTH) ||
       (bytes(params.teamBLogo).length == 0) ||
-      (params.gridSize == 0) ||
-      (params.gridSize > MAX_GRID_SIZE) ||
-      ((params.gridSize % 2) != 0) ||
+      (bytes(params.teamBLogo).length > MAX_TEAM_LOGO_LENGTH) ||
+      (params.gridSize != GRID_SIZE) ||
       (params.pixelFee == 0) ||
-      (params.maxDuration == 0)
+      (params.maxDuration == 0) ||
+      (params.maxDuration > MAX_DURATION)
     ) {
       revert InvalidArgument();
     }

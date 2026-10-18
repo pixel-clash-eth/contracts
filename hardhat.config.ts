@@ -30,7 +30,24 @@ const config: HardhatUserConfig = {
         },
       },
     ],
-    overrides: {},
+    overrides: {
+      // PixelClash is mostly glue code around the ArenaMethods/TagMethods libraries, which keep the
+      // high `runs` value above. A lower value here keeps it below the 24 KiB EIP-170 limit.
+      "contracts/PixelClash.sol": {
+        version: "0.8.28",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 10_000,
+          },
+          debug: {
+            revertStrings: "strip",
+          },
+          evmVersion: "cancun",
+          viaIR: true,
+        },
+      },
+    },
   },
   networks: {
     hardhat: {

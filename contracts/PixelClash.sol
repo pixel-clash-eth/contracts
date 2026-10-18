@@ -32,6 +32,7 @@ import {
 } from "./Arena.sol";
 
 import {ReferralRevenue} from "./Heap.sol";
+import {TagMethods} from "./Tags.sol";
 import {VRFClient, VRFConsumer} from "./VRFConsumer.sol";
 
 // Base fee for arena creation in USD cents. Currently $25.
@@ -49,6 +50,15 @@ uint32 constant VRF_CALLBACK_GAS_LIMIT = 1_000_000;
 // Referral discount: buyers who provide a referrer pay 10% less.
 uint256 constant REFERRAL_DISCOUNT_NUMERATOR = 9;
 uint256 constant REFERRAL_DISCOUNT_DENOMINATOR = 10;
+
+// Maximum number of elements returned by paginated views that return structs or strings. It keeps
+// each `eth_call` well below the gas caps and response size limits of public RPC providers.
+uint256 constant MAX_PAGE_SIZE = 100;
+
+// Time after which a draw whose VRF callback never arrived can be requested again. It is long on
+// purpose: a re-request gives the VRF provider a chance to withhold an unfavorable random word, so
+// it must only serve as a recovery mechanism.
+uint256 constant VRF_RETRY_DELAY = 1 days;
 
 // Represents a generic ERC-20 token with ERC-2612 permits.
 //
@@ -84,12 +94,16 @@ contract PixelClash is
   /// @param requested The number of pixels the player requested to purchase.
   /// @param acquired The number of pixels actually acquired (may be less than `requested` if the
   ///   arena filled up during the transaction).
+  /// @param referrer The referrer's address, or the zero address if the purchase wasn't referred.
+  /// @param fee The amount of currency tokens paid for the acquired pixels.
   event PurchasePixels(
     address indexed player,
     uint256 indexed arenaId,
     bool indexed teamB,
     uint256 requested,
-    uint256 acquired
+    uint256 acquired,
+    address referrer,
+    uint256 fee
   );
 
   /// @notice A Chainlink VRF randomness request was submitted for an arena draw.
@@ -110,6 +124,7 @@ contract PixelClash is
   event WithdrawPrize(uint256 indexed arenaId, address indexed player, uint256 prize);
 
   error AlreadyWithdrawn(uint256 arenaId, address player);
+  error DrawPending(uint256 arenaId, uint256 retryTimestamp);
   error InvalidPaymentAmount(uint256 got, uint256 want);
   error InvalidArenaId(uint256 id);
   error InvalidArgument();
@@ -155,6 +170,22 @@ contract PixelClash is
   /// @notice Arena IDs indexed by VRF request ID. Used to retrieve the correct arena in the VRF
   ///   callback.
   mapping(uint256 => uint256) public arenaIdsByVrfRequestId;
+
+  // NOTE: the following variables were added after the first version. New storage variables must
+  // always be appended at the end, and per-arena data must not be added to the `Arena` struct,
+  // because arenas are stored in an array and growing the struct would shift existing arenas.
+
+  /// @notice All distinct tags, in order of first use.
+  string[] private _tags;
+
+  /// @notice Tags of each arena, indexed by arena ID.
+  mapping(uint256 => string[]) private _arenaTags;
+
+  /// @notice IDs of the arenas that haven't been drawn yet.
+  EnumerableSet.UintSet private _activeArenaIds;
+
+  /// @notice Timestamp of the latest VRF request of each arena, indexed by arena ID.
+  mapping(uint256 => uint256) private _drawRequestTimestamps;
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor() {
@@ -245,6 +276,101 @@ contract PixelClash is
   function getArenaData(uint256 arenaId) public view returns (ArenaData memory) {
     Arena storage arena = getArenaFromStorage(arenaId);
     return arena.getData();
+  }
+
+  /// @notice Returns how many elements a page starting at `offset` contains, given `total`
+  ///   elements, at most `count` requested and at most `MAX_PAGE_SIZE` allowed.
+  function getPageSize(
+    uint256 total,
+    uint256 offset,
+    uint256 count
+  ) private pure returns (uint256 size) {
+    if (offset >= total) {
+      return 0;
+    }
+    size = total - offset;
+    if (size > count) {
+      size = count;
+    }
+    if (size > MAX_PAGE_SIZE) {
+      size = MAX_PAGE_SIZE;
+    }
+  }
+
+  /// @notice Returns the state of several arenas at once.
+  /// @dev The arenas are returned in reverse creation order (newest first).
+  /// @dev The `offset` and `count` parameters are used for paging. At most `MAX_PAGE_SIZE` arenas
+  ///   are returned regardless of `count`.
+  /// @return ids The arena IDs.
+  /// @return data The `ArenaData` of each arena in `ids`.
+  function getArenas(
+    uint256 offset,
+    uint256 count
+  ) public view returns (uint256[] memory ids, ArenaData[] memory data) {
+    uint256 total = getArenaCount();
+    uint256 size = getPageSize(total, offset, count);
+    ids = new uint256[](size);
+    data = new ArenaData[](size);
+    for (uint256 i = 0; i < size; ++i) {
+      ids[i] = total - offset - i;
+      data[i] = arenas[ids[i]].getData();
+    }
+  }
+
+  /// @notice Returns the tags of an arena, in the order they were provided at creation.
+  function getArenaTags(uint256 arenaId) public view returns (string[] memory) {
+    getArenaFromStorage(arenaId);
+    return _arenaTags[arenaId];
+  }
+
+  /// @notice Returns the distinct tags used by all arenas, along with the number of arenas using
+  ///   each of them.
+  /// @dev Tags are returned in order of first use, so pages stay stable while new tags are added.
+  /// @dev The `offset` and `count` parameters are used for paging. At most `MAX_PAGE_SIZE` tags
+  ///   are returned regardless of `count`.
+  /// @return tags The tags.
+  /// @return arenaCounts The number of arenas using each tag in `tags`.
+  /// @return total The total number of distinct tags.
+  function getTags(
+    uint256 offset,
+    uint256 count
+  ) public view returns (string[] memory tags, uint256[] memory arenaCounts, uint256 total) {
+    total = _tags.length;
+    uint256 size = getPageSize(total, offset, count);
+    (tags, arenaCounts) = TagMethods.getTags(_tags, _arenaIdsByTag, offset, size);
+  }
+
+  /// @notice Returns the number of arenas associated with the specified tag.
+  function getArenaCountByTag(string calldata tag) public view returns (uint256) {
+    return _arenaIdsByTag[tag].length;
+  }
+
+  /// @notice Returns the IDs of the arenas that haven't been drawn yet, ie. those in the open, full,
+  ///   timed out or drawing state.
+  /// @dev The order is unspecified, because removing a drawn arena moves the last one in its place.
+  /// @dev The `offset` and `count` parameters are used for paging. At most `MAX_PAGE_SIZE` IDs are
+  ///   returned regardless of `count`.
+  /// @return ids The arena IDs.
+  /// @return total The total number of arenas that haven't been drawn yet.
+  function getActiveArenas(
+    uint256 offset,
+    uint256 count
+  ) public view returns (uint256[] memory ids, uint256 total) {
+    total = _activeArenaIds.length();
+    uint256 size = getPageSize(total, offset, count);
+    ids = new uint256[](size);
+    for (uint256 i = 0; i < size; ++i) {
+      ids[i] = _activeArenaIds.at(offset + i);
+    }
+  }
+
+  /// @notice Returns the number of pixels a player acquired in each team of an arena.
+  function getPlayerPixels(
+    uint256 arenaId,
+    address player
+  ) public view returns (uint256 teamA, uint256 teamB) {
+    Arena storage arena = getArenaFromStorage(arenaId);
+    return (arena.teamAShares[player], arena.teamBShares[player]);
   }
 
   function getArenaIds(
@@ -358,6 +484,7 @@ contract PixelClash is
   ///   pixels in team A and `INITIAL_PIXELS / 2` pixel in team B. The payment is carried out via an
   ///   ERC-2612 signature.
   /// @param params The arena creation parameters.
+  /// @param tags Up to `MAX_TAGS_PER_ARENA` distinct canonical tags (see `Tags.sol`).
   /// @param deadline The deadline of the ERC-2612 signature.
   /// @param v The `v` parameter of the ERC-2612 signature.
   /// @param r The `r` parameter of the ERC-2612 signature.
@@ -369,14 +496,14 @@ contract PixelClash is
     uint8 v,
     bytes32 r,
     bytes32 s
-  ) public whenNotPaused nonReentrant {
+  ) public whenNotPaused nonReentrant returns (uint256 id) {
     address owner = msg.sender;
     uint256 fee = arenaCreationFee(params.pixelFee);
     uint256 numPixelsPerTeam = INITIAL_PIXELS / 2;
     try currencyToken.permit(owner, address(this), fee, deadline, v, r, s) {} catch {}
     currencyToken.safeTransferFrom(owner, address(this), fee);
 
-    uint256 id = arenas.length;
+    id = arenas.length;
     arenas.push();
     Arena storage arena = arenas[id];
     arena.initialize(owner, numPixelsPerTeam, params);
@@ -384,13 +511,29 @@ contract PixelClash is
 
     _arenaIdsByOwner[owner].push(id);
     _arenaIdsByPlayer[owner].add(id);
-    for (uint256 i = 0; i < tags.length; ++i) {
-      _arenaIdsByTag[tags[i]].push(id);
-    }
+    _activeArenaIds.add(id);
+    TagMethods.addArenaTags(_tags, _arenaIdsByTag, _arenaTags[id], id, tags);
 
+    uint256 initialFee = params.pixelFee * numPixelsPerTeam;
     emit CreateArena(owner, id);
-    emit PurchasePixels(owner, id, false, numPixelsPerTeam, numPixelsPerTeam);
-    emit PurchasePixels(owner, id, true, numPixelsPerTeam, numPixelsPerTeam);
+    emit PurchasePixels(
+      owner,
+      id,
+      false,
+      numPixelsPerTeam,
+      numPixelsPerTeam,
+      address(0),
+      initialFee
+    );
+    emit PurchasePixels(
+      owner,
+      id,
+      true,
+      numPixelsPerTeam,
+      numPixelsPerTeam,
+      address(0),
+      initialFee
+    );
   }
 
   /// @notice Acquires one or more pixels in an arena.
@@ -449,7 +592,15 @@ contract PixelClash is
 
     _arenaIdsByPlayer[player].add(arenaId);
 
-    emit PurchasePixels(player, arenaId, teamB, count, acquired);
+    emit PurchasePixels(
+      player,
+      arenaId,
+      teamB,
+      count,
+      acquired,
+      referrer,
+      effectivePixelFee * acquired
+    );
   }
 
   /// @notice Returns the price of a draw in ETH wei.
@@ -467,12 +618,21 @@ contract PixelClash is
   ///   automatically refund any excess.
   /// @dev The transaction will fail if the arena is not in the `ARENA_STATE_FULL` or
   ///   `ARENA_STATE_TIMED_OUT` state.
+  /// @dev If the VRF callback of a previous draw hasn't arrived within `VRF_RETRY_DELAY`, the
+  ///   arena can be drawn again: the previous request is discarded and its late callback, if any,
+  ///   will be rejected.
   /// @param arenaId The ID of the arena.
   function draw(uint256 arenaId) public payable whenNotPaused nonReentrant {
     Arena storage arena = getArenaFromStorage(arenaId);
     {
       uint256 state = arena.getState();
-      if (state <= ARENA_STATE_OPEN || state >= ARENA_STATE_DRAWING) {
+      if (state == ARENA_STATE_DRAWING) {
+        uint256 retryTimestamp = _drawRequestTimestamps[arenaId] + VRF_RETRY_DELAY;
+        if (block.timestamp < retryTimestamp) {
+          revert DrawPending(arenaId, retryTimestamp);
+        }
+        delete arenaIdsByVrfRequestId[arena.vrfRequestId];
+      } else if (state == ARENA_STATE_OPEN || state == ARENA_STATE_DRAWN) {
         // we're actually OK with TIMED_OUT too, but the custom error takes only one expected state
         revert InvalidState(arenaId, state, ARENA_STATE_FULL);
       }
@@ -486,6 +646,7 @@ contract PixelClash is
 
     arena.vrfRequestId = vrfConsumer.requestRandomness{value: price}(VRF_CALLBACK_GAS_LIMIT);
     arenaIdsByVrfRequestId[arena.vrfRequestId] = arenaId;
+    _drawRequestTimestamps[arenaId] = block.timestamp;
 
     emit VRFRequest(arenaId, arena.vrfRequestId);
 
@@ -506,6 +667,7 @@ contract PixelClash is
     Arena storage arena = getArenaAndCheckState(arenaId, ARENA_STATE_DRAWING);
     assert(arena.vrfRequestId == requestId);
     delete arenaIdsByVrfRequestId[requestId];
+    _activeArenaIds.remove(arenaId);
 
     (uint256 winner, uint256 revenue) = arena.draw(random);
     revenue += protocolRevenue;
@@ -548,9 +710,9 @@ contract PixelClash is
 
   /// @notice Returns the prize amount that has already been withdrawn by the player.
   /// @param arenaId The arena ID.
+  /// @param player The player's address.
   /// @return The withdrawn prize amount.
-  function getWithdrawnPrizeAmount(uint256 arenaId) public view returns (uint256) {
-    address player = msg.sender;
+  function getWithdrawnPrizeAmount(uint256 arenaId, address player) public view returns (uint256) {
     Arena storage arena = getArenaAndCheckState(arenaId, ARENA_STATE_DRAWN);
     return arena.withdrawals[player];
   }

@@ -6,7 +6,13 @@
     "postinstall": "patch-package",
     "lint": "hardhat check",
     "build": "hardhat compile",
-    "test": "hardhat test --network hardhat"
+    "test": "hardhat test --network hardhat",
+    "local:node": "hardhat node --hostname 127.0.0.1 --port 8545",
+    "local:deploy": "hardhat run scripts/local/deploy.ts --network localhost",
+    "local:reset": "hardhat run scripts/local/reset.ts --network localhost",
+    "local:smoke": "hardhat run scripts/local/smoke.ts --network localhost",
+    "local:fulfill": "hardhat run scripts/local/fulfill.ts --network localhost",
+    "local:timeout": "hardhat run scripts/local/timeout.ts --network localhost"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-chai-matchers": "^2.1.2",

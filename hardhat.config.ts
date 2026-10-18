@@ -9,6 +9,9 @@ import "hardhat-contract-sizer";
 
 dotenv.config();
 
+const forkUrl = process.env.HARDHAT_RPC_ADDRESS;
+const forkBlock = process.env.HARDHAT_FORK_BLOCK;
+
 const config: HardhatUserConfig = {
   solidity: {
     compilers: [
@@ -32,17 +35,15 @@ const config: HardhatUserConfig = {
   networks: {
     hardhat: {
       chainId: 31337,
-      forking: {
-        url: process.env.HARDHAT_RPC_ADDRESS!,
-        enabled: !!process.env.HARDHAT_RPC_ADDRESS,
-        blockNumber: process.env.HARDHAT_FORK_BLOCK
-          ? parseInt(process.env.HARDHAT_FORK_BLOCK!, 10)
-          : void 0,
-      },
+      hardfork: "cancun",
+      forking: forkUrl ? {
+        url: forkUrl,
+        blockNumber: forkBlock ? Number.parseInt(forkBlock, 10) : undefined,
+      } : undefined,
     },
     localhost: {
       chainId: 31337,
-      url: "http://localhost:8545",
+      url: "http://127.0.0.1:8545",
       accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
     },
     mainnet: {

@@ -207,6 +207,32 @@ describe("PixelClash", () => {
     });
   });
 
+  describe("referral codes", () => {
+    it("registers a code once per address and resolves it", async () => {
+      const { pixelClash, referrer, buyer } = await loadFixture(deploy);
+      await expect(pixelClash.connect(referrer).registerReferralCode("mario_99"))
+        .to.emit(pixelClash, "RegisterReferralCode")
+        .withArgs(referrer.address, "mario_99");
+      expect(await pixelClash.getReferralCodeOwner("mario_99")).to.equal(referrer.address);
+      expect(await pixelClash.getReferralCode(referrer.address)).to.equal("mario_99");
+      expect(await pixelClash.getReferralCodeOwner("nobody")).to.equal(ethers.ZeroAddress);
+
+      await expect(pixelClash.connect(referrer).registerReferralCode("other"))
+        .to.be.revertedWithCustomError(pixelClash, "ReferralCodeAlreadySet");
+      await expect(pixelClash.connect(buyer).registerReferralCode("mario_99"))
+        .to.be.revertedWithCustomError(pixelClash, "ReferralCodeTaken");
+    });
+
+    it("rejects codes outside the allowed charset and length", async () => {
+      const { pixelClash, buyer } = await loadFixture(deploy);
+      for (const code of ["ab", "a".repeat(21), "Mario", "ma rio", "mario!", "marìo", "0x"]) {
+        await expect(pixelClash.connect(buyer).registerReferralCode(code))
+          .to.be.revertedWithCustomError(pixelClash, "InvalidReferralCode");
+      }
+      await expect(pixelClash.connect(buyer).registerReferralCode("a-b_0".padEnd(20, "z"))).to.not.be.reverted;
+    });
+  });
+
   describe("players", () => {
     it("emits referrer and fee, and exposes pixels and withdrawals per player", async () => {
       const { pixelClash, create, buyer, referrer, creator, fulfill } = await loadFixture(deploy);
@@ -218,6 +244,9 @@ describe("PixelClash", () => {
         .withArgs(buyer.address, 1n, true, count, count, referrer.address, discountedFee * count);
       expect(await pixelClash.getPlayerPixels(1n, buyer.address)).to.deep.equal([0n, count]);
       expect(await pixelClash.getPlayerPixels(1n, creator.address)).to.deep.equal([5n, 5n]);
+      expect(await pixelClash.getPurchaseCount(1n)).to.equal(1n);
+      expect(await pixelClash.getArenaCountByPlayer(buyer.address)).to.equal(1n);
+      expect(await pixelClash.getArenaCountByPlayer(creator.address)).to.equal(1n);
 
       await pixelClash.draw(1n, { value: ethers.parseEther("1") });
       await fulfill((await pixelClash.getArenaData(1n)).vrfRequestId);

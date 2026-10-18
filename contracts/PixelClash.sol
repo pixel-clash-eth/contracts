@@ -60,6 +60,11 @@ uint256 constant MAX_PAGE_SIZE = 100;
 // it must only serve as a recovery mechanism.
 uint256 constant VRF_RETRY_DELAY = 1 days;
 
+// Referral codes are 3-20 characters among lowercase ASCII letters, digits, "-" and "_". The
+// restricted charset keeps them URL-safe and rules out Unicode look-alikes of other codes.
+uint256 constant MIN_REFERRAL_CODE_LENGTH = 3;
+uint256 constant MAX_REFERRAL_CODE_LENGTH = 20;
+
 // Represents a generic ERC-20 token with ERC-2612 permits.
 //
 // We use this type of token as currency for all payments and prizes in the game.
@@ -123,14 +128,22 @@ contract PixelClash is
   /// @param prize The amount of currency tokens transferred to the player.
   event WithdrawPrize(uint256 indexed arenaId, address indexed player, uint256 prize);
 
+  /// @notice A referrer registered their referral code.
+  /// @param referrer The referrer's address.
+  /// @param code The referral code.
+  event RegisterReferralCode(address indexed referrer, string code);
+
   error AlreadyWithdrawn(uint256 arenaId, address player);
   error DrawPending(uint256 arenaId, uint256 retryTimestamp);
   error InvalidPaymentAmount(uint256 got, uint256 want);
   error InvalidArenaId(uint256 id);
   error InvalidArgument();
+  error InvalidReferralCode(string code);
   error InvalidState(uint256 arenaId, uint256 got, uint256 want);
   error NoPrize(uint256 arenaId, address player);
   error PermissionDenied();
+  error ReferralCodeAlreadySet(address referrer);
+  error ReferralCodeTaken(string code);
   error SelfReferralForbidden();
 
   /// @notice All payments and prizes are in this token.
@@ -186,6 +199,12 @@ contract PixelClash is
 
   /// @notice Timestamp of the latest VRF request of each arena, indexed by arena ID.
   mapping(uint256 => uint256) private _drawRequestTimestamps;
+
+  /// @notice Referrer of each referral code.
+  mapping(string => address) private _referralCodeOwners;
+
+  /// @notice Referral code of each referrer.
+  mapping(address => string) private _referralCodes;
 
   /// @custom:oz-upgrades-unsafe-allow constructor
   constructor() {
@@ -371,6 +390,58 @@ contract PixelClash is
   ) public view returns (uint256 teamA, uint256 teamB) {
     Arena storage arena = getArenaFromStorage(arenaId);
     return (arena.teamAShares[player], arena.teamBShares[player]);
+  }
+
+  /// @notice Returns the number of pixel purchases made in an arena, excluding the pixels assigned
+  ///   to the owner at creation.
+  function getPurchaseCount(uint256 arenaId) public view returns (uint256) {
+    Arena storage arena = getArenaFromStorage(arenaId);
+    return arena.teamA.length + arena.teamB.length - 2;
+  }
+
+  /// @notice Returns the number of arenas the specified player has participated in, including the
+  ///   ones they created.
+  function getArenaCountByPlayer(address player) public view returns (uint256) {
+    return _arenaIdsByPlayer[player].length();
+  }
+
+  /// @notice Associates a referral code with the caller, so that referral links can use the code
+  ///   instead of the address.
+  /// @dev Codes are assigned first come, first served, and each address can register a single code.
+  ///   Neither can be changed afterwards. Note that the association is public like any on-chain
+  ///   data: the code is an alias, not a way to hide the referrer's address.
+  /// @param code The referral code (see `MIN_REFERRAL_CODE_LENGTH` and `MAX_REFERRAL_CODE_LENGTH`).
+  function registerReferralCode(string calldata code) public whenNotPaused {
+    address referrer = msg.sender;
+    if (bytes(_referralCodes[referrer]).length != 0) {
+      revert ReferralCodeAlreadySet(referrer);
+    }
+    if (_referralCodeOwners[code] != address(0)) {
+      revert ReferralCodeTaken(code);
+    }
+    bytes calldata chars = bytes(code);
+    if (chars.length < MIN_REFERRAL_CODE_LENGTH || chars.length > MAX_REFERRAL_CODE_LENGTH) {
+      revert InvalidReferralCode(code);
+    }
+    for (uint256 i = 0; i < chars.length; ++i) {
+      bytes1 c = chars[i];
+      if (!((c >= 0x61 && c <= 0x7A) || (c >= 0x30 && c <= 0x39) || c == 0x2D || c == 0x5F)) {
+        revert InvalidReferralCode(code);
+      }
+    }
+    _referralCodeOwners[code] = referrer;
+    _referralCodes[referrer] = code;
+    emit RegisterReferralCode(referrer, code);
+  }
+
+  /// @notice Returns the referrer of a referral code, or the zero address if it's not registered.
+  function getReferralCodeOwner(string calldata code) public view returns (address) {
+    return _referralCodeOwners[code];
+  }
+
+  /// @notice Returns the referral code of a referrer, or an empty string if they have none.
+  function getReferralCode(address referrer) public view returns (string memory) {
+    return _referralCodes[referrer];
   }
 
   function getArenaIds(

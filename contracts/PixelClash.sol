@@ -25,14 +25,14 @@ import {
   ArenaMethods,
   CreateArenaParams,
   Prizes,
-  Range,
+  PixelRange,
   ARENA_STATE_OPEN,
   ARENA_STATE_FULL,
   ARENA_STATE_DRAWING,
   ARENA_STATE_DRAWN
 } from "./Arena.sol";
 
-import {ReferralRevenue} from "./Heap.sol";
+import {ReferralRevenue} from "./Referrals.sol";
 import {TagMethods} from "./Tags.sol";
 import {VRFClient, VRFConsumer} from "./VRFConsumer.sol";
 
@@ -518,7 +518,7 @@ contract PixelClash is
   function getPixelRange(
     uint256 arenaId,
     uint256 index
-  ) public view returns (Range memory range, bool teamB) {
+  ) public view returns (PixelRange memory range, bool teamB) {
     Arena storage arena = getArenaFromStorage(arenaId);
     return arena.getPixelRange(index);
   }

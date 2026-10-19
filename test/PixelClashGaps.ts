@@ -256,6 +256,48 @@ describe("PixelClash", () => {
     });
   });
 
+  describe("top referrers", () => {
+    it("always matches a brute-force top 3 over random referrals", async () => {
+      const { pixelClash, create, buyer } = await loadFixture(deploy);
+      const referrers = (await ethers.getSigners()).slice(4, 14).map((signer) => signer.address);
+      await create();
+      const totals = new Map<string, bigint>();
+      let seed = 42;
+      const random = (n: number) => (seed = (seed * 1103515245 + 12345) % 2 ** 31) % n;
+      for (let i = 0; i < 80; ++i) {
+        const referrer = referrers[random(referrers.length)];
+        const count = BigInt(1 + random(20));
+        await pixelClash.connect(buyer).purchasePixelsWithPermit(1n, i % 2 === 0, count, referrer, ...NO_PERMIT);
+        totals.set(referrer, (totals.get(referrer) ?? 0n) + ((PIXEL_FEE * 9n) / 10n) * count);
+
+        const top = await pixelClash.getTopReferrers(1n);
+        const expected = [...totals.values()].sort((a, b) => (b > a ? 1 : b < a ? -1 : 0)).slice(0, 3);
+        // Revenues must be the 3 highest, in order; on ties any of the tied referrers is valid.
+        expect(top.map((r) => r.revenue)).to.deep.equal(expected);
+        for (const r of top) expect(r.revenue).to.equal(totals.get(r.referrer));
+        expect(new Set(top.map((r) => r.referrer)).size).to.equal(top.length);
+      }
+      for (const [referrer, total] of totals) {
+        expect(await pixelClash.getReferralRevenueFrom(1n, referrer)).to.equal(total);
+      }
+    });
+
+    it("pays the sponsor prize to the referrer stored with the winning pixel", async () => {
+      const { pixelClash, create, buyer, referrer, fulfill } = await loadFixture(deploy);
+      await create();
+      // Pixels 5..9994 of team A belong to the buyer, referred by `referrer`.
+      await pixelClash.connect(buyer).purchasePixelsWithPermit(1n, false, GRID_SIZE - INITIAL_PIXELS, referrer.address, ...NO_PERMIT);
+      await pixelClash.draw(1n, { value: ethers.parseEther("1") });
+      await fulfill((await pixelClash.getArenaData(1n)).vrfRequestId, 100n);
+      const [range] = await pixelClash.getPixelRange(1n, 100n);
+      expect(range.referrer).to.equal(referrer.address);
+      const prizes = await pixelClash.getPrizesFor(1n, referrer.address);
+      const revenue = (await pixelClash.getArenaData(1n)).revenue;
+      expect(prizes.sponsorPrize).to.equal((revenue * 5n) / 100n);
+      expect(prizes.topReferralPrize).to.equal((revenue * 9n) / 100n);
+    });
+  });
+
   describe("referral codes", () => {
     it("registers a code once per address and resolves it", async () => {
       const { pixelClash, referrer, buyer } = await loadFixture(deploy);

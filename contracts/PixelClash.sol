@@ -11,6 +11,7 @@ import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC2
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 
 import {IUniswapV3Pool} from "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
@@ -158,14 +159,18 @@ contract PixelClash is
   /// @notice List of arenas.
   Arena[] private arenas;
 
+  // NOTE: arena ID lists are `uint64[]` because Solidity packs 4 of them per storage slot, so 3
+  // out of 4 appends update an existing slot instead of writing a new one.
+
   /// @notice Arena IDs indexed by owner.
-  mapping(address => uint256[]) private _arenaIdsByOwner;
+  mapping(address => uint64[]) private _arenaIdsByOwner;
 
   /// @notice Arena IDs indexed by tag.
-  mapping(string => uint256[]) private _arenaIdsByTag;
+  mapping(string => uint64[]) private _arenaIdsByTag;
 
-  /// @notice Arena IDs indexed by the address of anyone who played in them.
-  mapping(address => EnumerableSet.UintSet) private _arenaIdsByPlayer;
+  /// @notice Arena IDs indexed by the address of anyone who played in them, in order of first
+  ///   participation.
+  mapping(address => uint64[]) private _arenaIdsByPlayer;
 
   /// @notice Protocol revenue in `currencyToken`.
   uint256 public protocolRevenue;
@@ -184,15 +189,19 @@ contract PixelClash is
   ///   callback.
   mapping(uint256 => uint256) public arenaIdsByVrfRequestId;
 
-  // NOTE: the following variables were added after the first version. New storage variables must
-  // always be appended at the end, and per-arena data must not be added to the `Arena` struct,
-  // because arenas are stored in an array and growing the struct would shift existing arenas.
+  // NOTE: once deployed, new storage variables must always be appended at the end, and per-arena
+  // data must not be added to the `Arena` struct, because arenas are stored in an array and growing
+  // the struct would shift existing arenas. The layout above changed (packed ID lists and `Range`)
+  // before the first production deployment, so it is not compatible with earlier test deployments.
 
-  /// @notice All distinct tags, in order of first use.
+  /// @notice All distinct tags, in order of first use. The ID of a tag is its index + 1.
   string[] private _tags;
 
-  /// @notice Tags of each arena, indexed by arena ID.
-  mapping(uint256 => string[]) private _arenaTags;
+  /// @notice 1-based tag IDs indexed by tag.
+  mapping(string => uint256) private _tagIds;
+
+  /// @notice Tag IDs of each arena, packed as described in `Tags.sol`, indexed by arena ID.
+  mapping(uint256 => uint256) private _arenaTagIds;
 
   /// @notice IDs of the arenas that haven't been drawn yet.
   EnumerableSet.UintSet private _activeArenaIds;
@@ -339,7 +348,7 @@ contract PixelClash is
   /// @notice Returns the tags of an arena, in the order they were provided at creation.
   function getArenaTags(uint256 arenaId) public view returns (string[] memory) {
     getArenaFromStorage(arenaId);
-    return _arenaTags[arenaId];
+    return TagMethods.getArenaTags(_tags, _arenaTagIds[arenaId]);
   }
 
   /// @notice Returns the distinct tags used by all arenas, along with the number of arenas using
@@ -402,7 +411,7 @@ contract PixelClash is
   /// @notice Returns the number of arenas the specified player has participated in, including the
   ///   ones they created.
   function getArenaCountByPlayer(address player) public view returns (uint256) {
-    return _arenaIdsByPlayer[player].length();
+    return _arenaIdsByPlayer[player].length;
   }
 
   /// @notice Associates a referral code with the caller, so that referral links can use the code
@@ -445,7 +454,7 @@ contract PixelClash is
   }
 
   function getArenaIds(
-    uint256[] storage ids,
+    uint64[] storage ids,
     uint256 offset,
     uint256 count
   ) private view returns (uint256[] memory result) {
@@ -494,17 +503,7 @@ contract PixelClash is
     uint256 offset,
     uint256 count
   ) public view returns (uint256[] memory ids) {
-    EnumerableSet.UintSet storage set = _arenaIdsByPlayer[player];
-    uint256 total = set.length();
-    if (offset >= total) {
-      return new uint256[](0);
-    }
-    uint256 available = total - offset;
-    uint256 size = available < count ? available : count;
-    ids = new uint256[](size);
-    for (uint256 i = 0; i < size; ++i) {
-      ids[i] = set.at(total - 1 - offset - i);
-    }
+    return getArenaIds(_arenaIdsByPlayer[player], offset, count);
   }
 
   /// @notice Returns the range including the given pixel.
@@ -580,10 +579,14 @@ contract PixelClash is
     arena.initialize(owner, numPixelsPerTeam, params);
     protocolRevenue += fee;
 
-    _arenaIdsByOwner[owner].push(id);
-    _arenaIdsByPlayer[owner].add(id);
+    uint64 id64 = SafeCast.toUint64(id);
+    _arenaIdsByOwner[owner].push(id64);
+    _arenaIdsByPlayer[owner].push(id64);
     _activeArenaIds.add(id);
-    TagMethods.addArenaTags(_tags, _arenaIdsByTag, _arenaTags[id], id, tags);
+    uint256 packedTagIds = TagMethods.addArenaTags(_tags, _tagIds, _arenaIdsByTag, id, tags);
+    if (packedTagIds != 0) {
+      _arenaTagIds[id] = packedTagIds;
+    }
 
     uint256 initialFee = params.pixelFee * numPixelsPerTeam;
     emit CreateArena(owner, id);
@@ -655,13 +658,16 @@ contract PixelClash is
     try currencyToken.permit(player, address(this), fee, deadline, v, r, s) {} catch {}
     currencyToken.safeTransferFrom(player, address(this), fee);
 
+    bool isNewPlayer = arena.teamAShares[player] == 0 && arena.teamBShares[player] == 0;
     uint256 acquired = arena.acquirePixels(player, count, teamB, referrer, effectivePixelFee);
     if (acquired < count) {
       uint256 refund = effectivePixelFee * (count - acquired);
       currencyToken.safeTransfer(player, refund);
     }
 
-    _arenaIdsByPlayer[player].add(arenaId);
+    if (isNewPlayer) {
+      _arenaIdsByPlayer[player].push(SafeCast.toUint64(arenaId));
+    }
 
     emit PurchasePixels(
       player,

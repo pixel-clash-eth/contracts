@@ -31,14 +31,16 @@ uint256 constant ARENA_OWNER_PRIZE = 5;
 
 /// @notice A range of pixels in an arena.
 /// @dev `offset+length` must be less than or equal to the grid size of the arena.
+/// @dev `owner`, `offset` and `length` are packed in a single storage slot, so each purchase writes
+///   2 slots instead of 4. 48 bits are plenty since the grid has `GRID_SIZE` pixels.
 struct Range {
   /// The owner of the range.
   address owner;
   /// Zero-based offset of the range. For team A this is the offset from the beginning of the grid,
   /// while for team B it's the offset from the end.
-  uint256 offset;
+  uint48 offset;
   /// Length of the range.
-  uint256 length;
+  uint48 length;
   /// The referrer address, or the zero address if the range was purchased without a referral.
   address referrer;
 }
@@ -206,11 +208,11 @@ library ArenaMethods {
       revert GridTooSmall(arena.gridSize);
     }
     arena.teamA.push(
-      Range({owner: owner, offset: 0, length: numPixelsPerTeam, referrer: address(0)})
+      Range({owner: owner, offset: 0, length: uint48(numPixelsPerTeam), referrer: address(0)})
     );
     arena.teamAShares[owner] += numPixelsPerTeam;
     arena.teamB.push(
-      Range({owner: owner, offset: 0, length: numPixelsPerTeam, referrer: address(0)})
+      Range({owner: owner, offset: 0, length: uint48(numPixelsPerTeam), referrer: address(0)})
     );
     arena.teamBShares[owner] += numPixelsPerTeam;
   }
@@ -339,14 +341,25 @@ library ArenaMethods {
     assert(teamACount + teamBCount < arena.gridSize);
     uint256 availablePixels = arena.gridSize - teamACount - teamBCount;
     acquired = availablePixels < count ? availablePixels : count;
+    // The casts are safe because all counts are bounded by `GRID_SIZE`.
     if (teamB) {
       arena.teamB.push(
-        Range({owner: player, offset: teamBCount, length: acquired, referrer: referrer})
+        Range({
+          owner: player,
+          offset: uint48(teamBCount),
+          length: uint48(acquired),
+          referrer: referrer
+        })
       );
       arena.teamBShares[player] += acquired;
     } else {
       arena.teamA.push(
-        Range({owner: player, offset: teamACount, length: acquired, referrer: referrer})
+        Range({
+          owner: player,
+          offset: uint48(teamACount),
+          length: uint48(acquired),
+          referrer: referrer
+        })
       );
       arena.teamAShares[player] += acquired;
     }

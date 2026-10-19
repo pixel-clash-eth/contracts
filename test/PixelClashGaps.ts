@@ -207,6 +207,55 @@ describe("PixelClash", () => {
     });
   });
 
+  describe("packed indexes", () => {
+    it("lists each arena once per player, newest first, and per owner", async () => {
+      const { pixelClash, create, buyer, creator } = await loadFixture(deploy);
+      for (let i = 0; i < 5; ++i) await create();
+      for (const id of [2n, 2n, 4n, 2n, 5n]) {
+        await pixelClash.connect(buyer).purchasePixelsWithPermit(id, false, 1n, ethers.ZeroAddress, ...NO_PERMIT);
+      }
+      expect(await pixelClash.getArenasByPlayer(buyer.address, 0n, 10n)).to.deep.equal([5n, 4n, 2n]);
+      expect(await pixelClash.getArenasByPlayer(buyer.address, 1n, 1n)).to.deep.equal([4n]);
+      expect(await pixelClash.getArenaCountByPlayer(buyer.address)).to.equal(3n);
+      expect(await pixelClash.getUserArenas(creator.address, 0n, 10n)).to.deep.equal([5n, 4n, 3n, 2n, 1n]);
+      expect(await pixelClash.getArenasByPlayer(creator.address, 0n, 2n)).to.deep.equal([5n, 4n]);
+    });
+
+    it("reuses tag IDs across arenas and keeps the order of each arena's tags", async () => {
+      const { pixelClash, create, tagMethods } = await loadFixture(deploy);
+      await create(["a", "b", "c"]);
+      await create(["c", "a"]);
+      await create([]);
+      expect(await pixelClash.getArenaTags(2n)).to.deep.equal(["c", "a"]);
+      expect(await pixelClash.getArenaTags(3n)).to.deep.equal([]);
+      const [tags, counts, total] = await pixelClash.getTags(0n, 10n);
+      expect(tags).to.deep.equal(["a", "b", "c"]);
+      expect(counts).to.deep.equal([2n, 1n, 2n]);
+      expect(total).to.equal(3n);
+      expect(await pixelClash.getArenasByTag("c", 0n, 10n)).to.deep.equal([2n, 1n]);
+      await expect(create(["b", "b"])).to.be.revertedWithCustomError(tagMethods, "InvalidTag");
+    });
+
+    it("reads packed pixel ranges for both teams and the gap", async () => {
+      const { pixelClash, create, buyer, referrer, creator } = await loadFixture(deploy);
+      await create();
+      await pixelClash.connect(buyer).purchasePixelsWithPermit(1n, false, 100n, referrer.address, ...NO_PERMIT);
+      await pixelClash.connect(buyer).purchasePixelsWithPermit(1n, true, 7n, ethers.ZeroAddress, ...NO_PERMIT);
+
+      // `Result` is an array, so `.length` would be its number of fields: read via `toObject()`.
+      const range = async (index: bigint) => {
+        const [r, teamB] = await pixelClash.getPixelRange(1n, index);
+        const { owner, offset, length, referrer } = r.toObject();
+        return [owner, offset, length, referrer, teamB];
+      };
+      expect(await range(4n)).to.deep.equal([creator.address, 0n, 5n, ethers.ZeroAddress, false]);
+      expect(await range(104n)).to.deep.equal([buyer.address, 5n, 100n, referrer.address, false]);
+      expect(await range(GRID_SIZE - 6n)).to.deep.equal([buyer.address, 5n, 7n, ethers.ZeroAddress, true]);
+      const [gap] = await pixelClash.getPixelRange(1n, 5_000n);
+      expect(gap.owner).to.equal(ethers.ZeroAddress);
+    });
+  });
+
   describe("referral codes", () => {
     it("registers a code once per address and resolves it", async () => {
       const { pixelClash, referrer, buyer } = await loadFixture(deploy);

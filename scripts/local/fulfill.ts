@@ -12,7 +12,13 @@ async function main() {
 
   await network.provider.send("hardhat_mine", ["0xa"]);
   const coordinator = await ethers.getContractAt("MockVRFCoordinator", manifest.vrfCoordinator);
-  await coordinator.fulfillRandomWordsWithOverride(arena.vrfRequestId, manifest.vrfWrapper, [randomWord]);
+  // The coordinator doesn't revert when the callback runs out of gas, so don't rely on an estimate.
+  await (
+    await coordinator.fulfillRandomWordsWithOverride(arena.vrfRequestId, manifest.vrfWrapper, [randomWord], {
+      gasLimit: 5_000_000n,
+    })
+  ).wait();
+  if ((await pixelClash.getArenaData(arenaId)).state !== 4n) throw new Error(`Arena ${arenaId} was not drawn`);
   console.log(`Fulfilled arena ${arenaId} with random word ${randomWord}`);
 }
 

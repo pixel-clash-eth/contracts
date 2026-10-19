@@ -84,9 +84,12 @@ async function main() {
   );
   await pixelClash.waitForDeployment();
   await gateway.transferOwnership(await pixelClash.getAddress());
+  // Only the deployer sends transactions: one sent from a test account would advance its nonce
+  // behind the wallet's back, and the wallet's next transaction would fail with "nonce too low".
   const [, ...testAccounts] = await ethers.getSigners();
+  await (await currency.mint(TEST_ACCOUNT_BALANCE * BigInt(testAccounts.length))).wait();
   for (const account of testAccounts) {
-    await (await currency.connect(account).mint(TEST_ACCOUNT_BALANCE)).wait();
+    await (await currency.transfer(account.address, TEST_ACCOUNT_BALANCE)).wait();
   }
 
   const manifest = {

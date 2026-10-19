@@ -12,7 +12,8 @@
     "local:reset": "hardhat run scripts/local/reset.ts --network localhost",
     "local:smoke": "hardhat run scripts/local/smoke.ts --network localhost",
     "local:fulfill": "hardhat run scripts/local/fulfill.ts --network localhost",
-    "local:timeout": "hardhat run scripts/local/timeout.ts --network localhost"
+    "local:timeout": "hardhat run scripts/local/timeout.ts --network localhost",
+    "local:fund": "hardhat run scripts/local/fund.ts --network localhost"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-chai-matchers": "^2.1.2",

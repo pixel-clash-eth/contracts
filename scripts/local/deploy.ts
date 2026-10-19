@@ -6,6 +6,8 @@ const BASE_FEE = 100_000_000_000_000_000n;
 const GAS_PRICE = 1_000_000_000n;
 const WEI_PER_LINK = 4_000_000_000_000_000n;
 const POOL_LIQUIDITY = 10n ** 18n;
+// Currency tokens minted to each of the other Hardhat accounts, so that any of them can play.
+const TEST_ACCOUNT_BALANCE = 1_000_000n * 10n ** 18n;
 
 function required(name: string) {
   const value = process.env[name];
@@ -82,6 +84,10 @@ async function main() {
   );
   await pixelClash.waitForDeployment();
   await gateway.transferOwnership(await pixelClash.getAddress());
+  const [, ...testAccounts] = await ethers.getSigners();
+  for (const account of testAccounts) {
+    await (await currency.connect(account).mint(TEST_ACCOUNT_BALANCE)).wait();
+  }
 
   const manifest = {
     chainId: 31337,

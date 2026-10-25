@@ -7,6 +7,7 @@ const GRID_SIZE = 10_000n;
 const INITIAL_PIXELS = 10n;
 const PIXEL_FEE = ethers.parseUnits("1", 18);
 const DAY = 24n * 60n * 60n;
+const VRF_RETRY_DELAY = 6n * 60n * 60n;
 const NO_PERMIT = [0n, 0, ethers.ZeroHash, ethers.ZeroHash] as const;
 
 const params = (overrides: Record<string, unknown> = {}) => ({
@@ -194,7 +195,9 @@ describe("PixelClash", () => {
       const staleRequestId = (await pixelClash.getArenaData(1n)).vrfRequestId;
 
       await expect(pixelClash.draw(1n, { value: ethers.parseEther("1") })).to.be.revertedWithCustomError(pixelClash, "DrawPending");
-      await time.increase(DAY);
+      await time.increase(VRF_RETRY_DELAY - 10n);
+      await expect(pixelClash.draw(1n, { value: ethers.parseEther("1") })).to.be.revertedWithCustomError(pixelClash, "DrawPending");
+      await time.increase(10n);
       await expect(pixelClash.draw(1n, { value: ethers.parseEther("1") })).to.emit(pixelClash, "VRFRequest");
       const requestId = (await pixelClash.getArenaData(1n)).vrfRequestId;
       expect(requestId).to.not.equal(staleRequestId);

@@ -59,7 +59,7 @@ uint256 constant MAX_PAGE_SIZE = 100;
 // Time after which a draw whose VRF callback never arrived can be requested again. It is long on
 // purpose: a re-request gives the VRF provider a chance to withhold an unfavorable random word, so
 // it must only serve as a recovery mechanism.
-uint256 constant VRF_RETRY_DELAY = 1 days;
+uint256 constant VRF_RETRY_DELAY = 6 hours;
 
 // Referral codes are 3-20 characters among lowercase ASCII letters, digits, "-" and "_". The
 // restricted charset keeps them URL-safe and rules out Unicode look-alikes of other codes.

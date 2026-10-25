@@ -96,6 +96,8 @@ async function main() {
     chainId: 31337,
     deployer: owner.address,
     pixelClash: await pixelClash.getAddress(),
+    // The frontend doesn't look for contract events before this block.
+    deployBlock: (await pixelClash.deploymentTransaction()?.wait())?.blockNumber,
     currencyToken: await currency.getAddress(),
     pixelToken: await pixel.getAddress(),
     arenaMethods: await arenaMethods.getAddress(),

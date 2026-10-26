@@ -45,6 +45,26 @@ const REFERRAL_DISCOUNT_DENOMINATOR = 10n;
 const DISCOUNTED_PIXEL_FEE =
   (ONE_USDC * REFERRAL_DISCOUNT_NUMERATOR) / REFERRAL_DISCOUNT_DENOMINATOR;
 
+const MAX_DURATION = 3600n * 24n * 365n;
+const VRF_RETRY_DELAY = 3600n * 6n;
+
+function arenaParams(overrides: Record<string, unknown> = {}) {
+  return {
+    teamAName: "Dogs",
+    teamALogo: "\u{1F436}",
+    teamALogoCid: ethers.ZeroHash,
+    teamAColor: 0xff0000,
+    teamBName: "Cats",
+    teamBLogo: "\u{1F431}",
+    teamBLogoCid: ethers.ZeroHash,
+    teamBColor: 0x0000ff,
+    gridSize: STANDARD_GRID_SIZE,
+    pixelFee: ONE_USDC,
+    maxDuration: STANDARD_MAX_DURATION,
+    ...overrides,
+  };
+}
+
 class Fixture {
   private static async _deploy(): Promise<Fixture> {
     const [owner, creator, player1, player2] = await ethers.getSigners();
@@ -234,6 +254,10 @@ class Fixture {
   }
 
   public async createTestArena(): Promise<void> {
+    await this.createArena(["animals", "dogs", "cats"]);
+  }
+
+  public async createArena(tags: string[], overrides: Record<string, unknown> = {}) {
     const { creator } = this;
 
     await this._currencyToken.connect(creator).mint(ARENA_CREATION_FEE);
@@ -241,31 +265,41 @@ class Fixture {
       .connect(creator)
       .approve(await this._pixelClash.getAddress(), ARENA_CREATION_FEE);
 
-    const pixelFee = ONE_USDC;
-    const params = {
-      teamAName: "Dogs",
-      teamALogo: "\u{1F436}",
-      teamALogoCid: ethers.ZeroHash,
-      teamAColor: 0xff0000,
-      teamBName: "Cats",
-      teamBLogo: "\u{1F431}",
-      teamBLogoCid: ethers.ZeroHash,
-      teamBColor: 0x0000ff,
-      gridSize: STANDARD_GRID_SIZE,
-      pixelFee,
-      maxDuration: STANDARD_MAX_DURATION,
-    };
-
-    await this._pixelClash
+    return await this._pixelClash
       .connect(creator)
       .createArenaWithPermit(
-        params,
-        ["animals", "dogs", "cats"],
+        arenaParams(overrides),
+        tags,
         ethers.MaxUint256,
         0,
         ethers.ZeroHash,
         ethers.ZeroHash,
       );
+  }
+
+  // Mints `amount` currency tokens to `player` and lets PixelClash spend all of them.
+  public async fund(player: Signer, amount: bigint): Promise<void> {
+    await this._currencyToken.connect(player).mint(amount);
+    await this._currencyToken
+      .connect(player)
+      .approve(await this._pixelClash.getAddress(), ethers.MaxUint256);
+  }
+
+  // player1 buys all the team A pixels left in a fresh arena, without a referrer.
+  public async fill(arenaId: number): Promise<void> {
+    const count = BigInt(STANDARD_GRID_SIZE) - INITIAL_PIXELS;
+    await this.fund(this.player1, ONE_USDC * count);
+    await this.purchasePixels(this.player1, arenaId, false, count, null);
+  }
+
+  public async fulfill(vrfRequestId: bigint, randomWord: bigint = 0n): Promise<void> {
+    await mine(10);
+    const vrfConsumer = await ethers.getContractAt("VRFConsumer", await this._pixelClash.vrfConsumer());
+    await this._mockVrfCoordinator.fulfillRandomWordsWithOverride(
+      vrfRequestId,
+      await vrfConsumer.i_vrfV2PlusWrapper(),
+      [randomWord],
+    );
   }
 
   public async purchasePixels(
@@ -1858,5 +1892,312 @@ describe("PixelClash", function () {
 
     const referrer3Prizes = await pixelClash.getPrizesFor(arenaId, await referrer3.getAddress());
     expect(referrer3Prizes.topReferralPrize).to.equal(expectedPrize3);
+  });
+
+  describe("tags", function () {
+    it("indexes arena tags and the global catalog with arena counts", async function () {
+      const fixture = await Fixture.load();
+      const { creator, pixelClash } = fixture;
+      await fixture.fund(creator, ARENA_CREATION_FEE);
+      expect(
+        await pixelClash
+          .connect(creator)
+          .createArenaWithPermit.staticCall(
+            arenaParams(),
+            ["sport"],
+            ethers.MaxUint256,
+            0,
+            ethers.ZeroHash,
+            ethers.ZeroHash,
+          ),
+      ).to.equal(1n);
+      await fixture.createArena(["sport", "calcio-⚽"]);
+      await fixture.createArena(["sport", "crypto"]);
+
+      expect(await pixelClash.getArenaTags(1)).to.deep.equal(["sport", "calcio-⚽"]);
+      expect(await pixelClash.getArenaTags(2)).to.deep.equal(["sport", "crypto"]);
+      const [tags, counts, total] = await pixelClash.getTags(0, 10);
+      expect(tags).to.deep.equal(["sport", "calcio-⚽", "crypto"]);
+      expect(counts).to.deep.equal([2n, 1n, 1n]);
+      expect(total).to.equal(3n);
+      const [page] = await pixelClash.getTags(1, 1);
+      expect(page).to.deep.equal(["calcio-⚽"]);
+      expect(await pixelClash.getArenaCountByTag("sport")).to.equal(2n);
+      expect(await pixelClash.getArenasByTag("sport", 0, 10)).to.deep.equal([2n, 1n]);
+    });
+
+    it("rejects non-canonical, duplicate and excess tags", async function () {
+      const fixture = await Fixture.load();
+      const tagMethods = await ethers.getContractAt("TagMethods", ethers.ZeroAddress);
+      for (const tag of ["Sport", "two words", "", "x".repeat(33), "tab\t"]) {
+        await expect(fixture.createArena([tag])).to.be.revertedWithCustomError(
+          tagMethods,
+          "InvalidTag",
+        );
+      }
+      await expect(fixture.createArena(["sport", "sport"])).to.be.revertedWithCustomError(
+        tagMethods,
+        "InvalidTag",
+      );
+      await expect(fixture.createArena(["a", "b", "c", "d"])).to.be.revertedWithCustomError(
+        tagMethods,
+        "TooManyTags",
+      );
+      await expect(fixture.createArena(["x".repeat(32), "a", "b"])).to.not.be.reverted;
+    });
+
+    it("reverts for an invalid arena id", async function () {
+      const { pixelClash } = await Fixture.load();
+      await expect(pixelClash.getArenaTags(1)).to.be.revertedWithCustomError(
+        pixelClash,
+        "InvalidArenaId",
+      );
+    });
+  });
+
+  describe("arena parameters", function () {
+    it("enforces the fixed grid size and bounded fields", async function () {
+      const fixture = await Fixture.load();
+      const arenaMethods = await ethers.getContractAt("ArenaMethods", ethers.ZeroAddress);
+      for (const overrides of [
+        { gridSize: 1_000 },
+        { gridSize: 20_000 },
+        { teamAName: "a".repeat(65) },
+        { teamBLogo: "🔥".repeat(17) },
+        { maxDuration: MAX_DURATION + 1n },
+      ]) {
+        await expect(fixture.createArena([], overrides)).to.be.revertedWithCustomError(
+          arenaMethods,
+          "InvalidArgument",
+        );
+      }
+      await expect(fixture.createArena([], { teamAName: "a".repeat(64), maxDuration: MAX_DURATION }))
+        .to.not.be.reverted;
+    });
+  });
+
+  describe("paginated views", function () {
+    it("tracks active arenas until they are drawn", async function () {
+      const fixture = await Fixture.load();
+      const { pixelClash } = fixture;
+      await fixture.createTestArena();
+      await fixture.createTestArena();
+      expect(await pixelClash.getActiveArenas(0, 10)).to.deep.equal([[1n, 2n], 2n]);
+
+      await fixture.fill(1);
+      await pixelClash.draw(1, { value: ethers.parseEther("1") });
+      await fixture.fulfill((await pixelClash.getArenaData(1)).vrfRequestId);
+      expect((await pixelClash.getArenaData(1)).state).to.equal(ARENA_STATE_DRAWN);
+      expect(await pixelClash.getActiveArenas(0, 10)).to.deep.equal([[2n], 1n]);
+    });
+  });
+
+  describe("draw recovery", function () {
+    it("allows a new draw only after the retry delay and ignores the stale callback", async function () {
+      const fixture = await Fixture.load();
+      const { pixelClash } = fixture;
+      await fixture.createTestArena();
+      await fixture.fill(1);
+      await pixelClash.draw(1, { value: ethers.parseEther("1") });
+      const staleRequestId = (await pixelClash.getArenaData(1)).vrfRequestId;
+
+      await expect(
+        pixelClash.draw(1, { value: ethers.parseEther("1") }),
+      ).to.be.revertedWithCustomError(pixelClash, "DrawPending");
+      await time.increase(VRF_RETRY_DELAY - 10n);
+      await expect(
+        pixelClash.draw(1, { value: ethers.parseEther("1") }),
+      ).to.be.revertedWithCustomError(pixelClash, "DrawPending");
+      await time.increase(10n);
+      await expect(pixelClash.draw(1, { value: ethers.parseEther("1") })).to.emit(
+        pixelClash,
+        "VRFRequest",
+      );
+      const requestId = (await pixelClash.getArenaData(1)).vrfRequestId;
+      expect(requestId).to.not.equal(staleRequestId);
+      expect(await pixelClash.arenaIdsByVrfRequestId(staleRequestId)).to.equal(0n);
+
+      await fixture.fulfill(staleRequestId);
+      expect((await pixelClash.getArenaData(1)).state).to.equal(ARENA_STATE_DRAWING);
+      await fixture.fulfill(requestId);
+      expect((await pixelClash.getArenaData(1)).state).to.equal(ARENA_STATE_DRAWN);
+    });
+  });
+
+  describe("packed indexes", function () {
+    it("lists each arena once per player, newest first, and per owner", async function () {
+      const fixture = await Fixture.load();
+      const { creator, player1, pixelClash } = fixture;
+      const creatorAddress = await creator.getAddress();
+      const player1Address = await player1.getAddress();
+      for (let i = 0; i < 5; ++i) await fixture.createTestArena();
+      await fixture.fund(player1, 5n * ONE_USDC);
+      for (const id of [2, 2, 4, 2, 5]) await fixture.purchasePixels(player1, id, false, 1, null);
+
+      expect(await pixelClash.getArenasByPlayer(player1Address, 0, 10)).to.deep.equal([5n, 4n, 2n]);
+      expect(await pixelClash.getArenasByPlayer(player1Address, 1, 1)).to.deep.equal([4n]);
+      expect(await pixelClash.getArenaCountByPlayer(player1Address)).to.equal(3n);
+      expect(await pixelClash.getUserArenas(creatorAddress, 0, 10)).to.deep.equal([
+        5n,
+        4n,
+        3n,
+        2n,
+        1n,
+      ]);
+      expect(await pixelClash.getArenasByPlayer(creatorAddress, 0, 2)).to.deep.equal([5n, 4n]);
+    });
+
+    it("reuses tag IDs across arenas and keeps the order of each arena's tags", async function () {
+      const fixture = await Fixture.load();
+      const { pixelClash } = fixture;
+      const tagMethods = await ethers.getContractAt("TagMethods", ethers.ZeroAddress);
+      await fixture.createArena(["a", "b", "c"]);
+      await fixture.createArena(["c", "a"]);
+      await fixture.createArena([]);
+      expect(await pixelClash.getArenaTags(2)).to.deep.equal(["c", "a"]);
+      expect(await pixelClash.getArenaTags(3)).to.deep.equal([]);
+      const [tags, counts, total] = await pixelClash.getTags(0, 10);
+      expect(tags).to.deep.equal(["a", "b", "c"]);
+      expect(counts).to.deep.equal([2n, 1n, 2n]);
+      expect(total).to.equal(3n);
+      expect(await pixelClash.getArenasByTag("c", 0, 10)).to.deep.equal([2n, 1n]);
+      await expect(fixture.createArena(["b", "b"])).to.be.revertedWithCustomError(
+        tagMethods,
+        "InvalidTag",
+      );
+    });
+
+    it("reads packed pixel ranges for both teams and the gap", async function () {
+      const fixture = await Fixture.load();
+      const { creator, player1, player2, pixelClash } = fixture;
+      const creatorAddress = await creator.getAddress();
+      const player1Address = await player1.getAddress();
+      const player2Address = await player2.getAddress();
+      await fixture.createTestArena();
+      await fixture.fund(player1, 107n * ONE_USDC);
+      await fixture.purchasePixels(player1, 1, false, 100, player2);
+      await fixture.purchasePixels(player1, 1, true, 7, null);
+
+      // `Result` is an array, so `.length` would be its number of fields: read via `toObject()`.
+      const range = async (index: bigint) => {
+        const [r, teamB] = await pixelClash.getPixelRange(1, index);
+        const { owner, offset, length, referrer } = r.toObject();
+        return [owner, offset, length, referrer, teamB];
+      };
+      expect(await range(4n)).to.deep.equal([creatorAddress, 0n, 5n, ethers.ZeroAddress, false]);
+      expect(await range(104n)).to.deep.equal([player1Address, 5n, 100n, player2Address, false]);
+      expect(await range(BigInt(STANDARD_GRID_SIZE) - 6n)).to.deep.equal([
+        player1Address,
+        5n,
+        7n,
+        ethers.ZeroAddress,
+        true,
+      ]);
+      const [gap] = await pixelClash.getPixelRange(1, 5_000);
+      expect(gap.owner).to.equal(ethers.ZeroAddress);
+    });
+  });
+
+  describe("top referrers", function () {
+    it("always matches a brute-force top 3 over random referrals", async function () {
+      const fixture = await Fixture.load();
+      const { player1, pixelClash } = fixture;
+      const referrers = (await ethers.getSigners()).slice(4, 14);
+      await fixture.createTestArena();
+      await fixture.fund(player1, 80n * 20n * ONE_USDC);
+      const totals = new Map<string, bigint>();
+      let seed = 42;
+      const random = (n: number) => (seed = (seed * 1103515245 + 12345) % 2 ** 31) % n;
+      for (let i = 0; i < 80; ++i) {
+        const referrer = referrers[random(referrers.length)];
+        const count = BigInt(1 + random(20));
+        await fixture.purchasePixels(player1, 1, i % 2 === 0, count, referrer);
+        totals.set(referrer.address, (totals.get(referrer.address) ?? 0n) + DISCOUNTED_PIXEL_FEE * count);
+
+        const top = await pixelClash.getTopReferrers(1);
+        const expected = [...totals.values()]
+          .sort((a, b) => (b > a ? 1 : b < a ? -1 : 0))
+          .slice(0, 3);
+        // Revenues must be the 3 highest, in order; on ties any of the tied referrers is valid.
+        expect(top.map((r) => r.revenue)).to.deep.equal(expected);
+        for (const r of top) expect(r.revenue).to.equal(totals.get(r.referrer));
+        expect(new Set(top.map((r) => r.referrer)).size).to.equal(top.length);
+      }
+      for (const [referrer, total] of totals) {
+        expect(await pixelClash.getReferralRevenueFrom(1, referrer)).to.equal(total);
+      }
+    });
+  });
+
+  describe("referral codes", function () {
+    it("registers a code once per address and resolves it", async function () {
+      const { player1, player2, pixelClash } = await Fixture.load();
+      const player2Address = await player2.getAddress();
+      await expect(pixelClash.connect(player2).registerReferralCode("mario_99"))
+        .to.emit(pixelClash, "RegisterReferralCode")
+        .withArgs(player2Address, "mario_99");
+      expect(await pixelClash.getReferralCodeOwner("mario_99")).to.equal(player2Address);
+      expect(await pixelClash.getReferralCode(player2Address)).to.equal("mario_99");
+      expect(await pixelClash.getReferralCodeOwner("nobody")).to.equal(ethers.ZeroAddress);
+
+      await expect(
+        pixelClash.connect(player2).registerReferralCode("other"),
+      ).to.be.revertedWithCustomError(pixelClash, "ReferralCodeAlreadySet");
+      await expect(
+        pixelClash.connect(player1).registerReferralCode("mario_99"),
+      ).to.be.revertedWithCustomError(pixelClash, "ReferralCodeTaken");
+    });
+
+    it("rejects codes outside the allowed charset and length", async function () {
+      const { player1, pixelClash } = await Fixture.load();
+      for (const code of ["ab", "a".repeat(21), "Mario", "ma rio", "mario!", "marìo", "0x"]) {
+        await expect(
+          pixelClash.connect(player1).registerReferralCode(code),
+        ).to.be.revertedWithCustomError(pixelClash, "InvalidReferralCode");
+      }
+      await expect(pixelClash.connect(player1).registerReferralCode("a-b_0".padEnd(20, "z"))).to
+        .not.be.reverted;
+    });
+  });
+
+  describe("players", function () {
+    it("emits referrer and fee, and exposes pixels and withdrawals per player", async function () {
+      const fixture = await Fixture.load();
+      const { creator, player1, player2, pixelClash } = fixture;
+      const creatorAddress = await creator.getAddress();
+      const player1Address = await player1.getAddress();
+      const player2Address = await player2.getAddress();
+      await fixture.createTestArena();
+      const count = BigInt(STANDARD_GRID_SIZE) - INITIAL_PIXELS;
+      await fixture.fund(player1, DISCOUNTED_PIXEL_FEE * count);
+      await expect(
+        pixelClash
+          .connect(player1)
+          .purchasePixelsWithPermit(
+            1,
+            true,
+            count,
+            player2Address,
+            ethers.MaxUint256,
+            0,
+            ethers.ZeroHash,
+            ethers.ZeroHash,
+          ),
+      )
+        .to.emit(pixelClash, "PurchasePixels")
+        .withArgs(player1Address, 1n, true, count, count, player2Address, DISCOUNTED_PIXEL_FEE * count);
+      expect(await pixelClash.getPlayerPixels(1, player1Address)).to.deep.equal([0n, count]);
+      expect(await pixelClash.getPlayerPixels(1, creatorAddress)).to.deep.equal([5n, 5n]);
+      expect(await pixelClash.getPurchaseCount(1)).to.equal(1n);
+      expect(await pixelClash.getArenaCountByPlayer(player1Address)).to.equal(1n);
+      expect(await pixelClash.getArenaCountByPlayer(creatorAddress)).to.equal(1n);
+
+      await pixelClash.draw(1, { value: ethers.parseEther("1") });
+      await fixture.fulfill((await pixelClash.getArenaData(1)).vrfRequestId);
+      const prize = await pixelClash.getPrizeFor(1, creatorAddress);
+      await pixelClash.connect(creator).withdrawPrize(1);
+      expect(await pixelClash.getWithdrawnPrizeAmount(1, creatorAddress)).to.equal(prize);
+      expect(await pixelClash.getWithdrawnPrizeAmount(1, player1Address)).to.equal(0n);
+    });
   });
 });

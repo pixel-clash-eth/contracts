@@ -2098,6 +2098,104 @@ describe("PixelClash", function () {
       const [gap] = await pixelClash.getPixelRange(1, 5_000);
       expect(gap.owner).to.equal(ethers.ZeroAddress);
     });
+
+    it("lists the pixel ranges of each team in pages", async function () {
+      const fixture = await Fixture.load();
+      const { creator, player1, player2, pixelClash } = fixture;
+      const creatorAddress = await creator.getAddress();
+      const player1Address = await player1.getAddress();
+      const player2Address = await player2.getAddress();
+      await fixture.createTestArena();
+      await fixture.fund(player1, 107n * ONE_USDC);
+      await fixture.fund(player2, 3n * ONE_USDC);
+      await fixture.purchasePixels(player1, 1, false, 100, player2);
+      await fixture.purchasePixels(player1, 1, true, 7, null);
+      await fixture.purchasePixels(player2, 1, false, 3, null);
+
+      expect(await pixelClash.getTeamRanges(1, false, 0, 10)).to.deep.equal([
+        [creatorAddress, player1Address, player2Address],
+        [0n, 5n, 105n],
+        [5n, 100n, 3n],
+        3n,
+      ]);
+      expect(await pixelClash.getTeamRanges(1, true, 0, 10)).to.deep.equal([
+        [creatorAddress, player1Address],
+        [0n, 5n],
+        [5n, 7n],
+        2n,
+      ]);
+      expect(await pixelClash.getTeamRanges(1, false, 1, 1)).to.deep.equal([
+        [player1Address],
+        [5n],
+        [100n],
+        3n,
+      ]);
+      expect(await pixelClash.getTeamRanges(1, false, 3, 10)).to.deep.equal([[], [], [], 3n]);
+      await expect(pixelClash.getTeamRanges(2, false, 0, 10)).to.be.revertedWithCustomError(
+        pixelClash,
+        "InvalidArenaId",
+      );
+    });
+
+    it("rebuilds every player's pixels from the team ranges", async function () {
+      const fixture = await Fixture.load();
+      const { pixelClash } = fixture;
+      const players = (await ethers.getSigners()).slice(4, 12);
+      await fixture.createTestArena();
+      for (const player of players) await fixture.fund(player, 2_000n * ONE_USDC);
+      let seed = 7;
+      const random = (n: number) => (seed = (seed * 1103515245 + 12345) % 2 ** 31) % n;
+      // More purchases than a page holds, interleaved between players and teams.
+      for (let i = 0; i < 160; ++i) {
+        const player = players[random(players.length)];
+        await fixture.purchasePixels(player, 1, random(2) === 1, 1 + random(25), null);
+      }
+
+      const data = await pixelClash.getArenaData(1);
+      const owned = new Map<string, [bigint, bigint]>();
+      for (const teamB of [false, true]) {
+        const ranges: [string, bigint, bigint][] = [];
+        let total = 1n;
+        while (BigInt(ranges.length) < total) {
+          const [owners, offsets, lengths, count] = await pixelClash.getTeamRanges(
+            1,
+            teamB,
+            ranges.length,
+            1_000,
+          );
+          expect(owners.length).to.be.at.most(100);
+          total = count;
+          owners.forEach((owner, i) => ranges.push([owner, offsets[i], lengths[i]]));
+        }
+        // Contiguous from the corner of the team up to its size: every pixel has exactly one owner.
+        let next = 0n;
+        for (const [owner, offset, length] of ranges) {
+          expect(offset).to.equal(next);
+          next += length;
+          const shares = owned.get(owner) ?? [0n, 0n];
+          shares[teamB ? 1 : 0] += length;
+          owned.set(owner, shares);
+        }
+        expect(next).to.equal(teamB ? data.teamBCount : data.teamACount);
+        // Each range is the one `getPixelRange` finds for its last pixel.
+        for (const [owner, offset, length] of ranges.filter((_, i) => i % 17 === 0)) {
+          const last = offset + length - 1n;
+          const index = teamB ? BigInt(STANDARD_GRID_SIZE) - 1n - last : last;
+          const [range, isTeamB] = await pixelClash.getPixelRange(1, index);
+          // `Result` is an array, so `.length` would be its number of fields: read via `toObject()`.
+          const { owner: rangeOwner, offset: rangeOffset, length: rangeLength } = range.toObject();
+          expect([rangeOwner, rangeOffset, rangeLength, isTeamB]).to.deep.equal([
+            owner,
+            offset,
+            length,
+            teamB,
+          ]);
+        }
+      }
+      for (const [owner, shares] of owned) {
+        expect(await pixelClash.getPlayerPixels(1, owner)).to.deep.equal(shares);
+      }
+    });
   });
 
   describe("top referrers", function () {

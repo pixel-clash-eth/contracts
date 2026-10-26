@@ -246,6 +246,46 @@ library ArenaMethods {
     }
   }
 
+  /// @notice Returns a page of the pixel ranges of a team, in order of acquisition.
+  /// @param teamB Whether to return the ranges of team B rather than team A.
+  /// @param offset The index of the first range to return.
+  /// @param count The maximum number of ranges to return.
+  /// @return owners The owner of each range.
+  /// @return offsets The offset of each range, counted from the corner of the team.
+  /// @return lengths The number of pixels of each range.
+  /// @return total The total number of ranges of the team.
+  function getRanges(
+    Arena storage arena,
+    bool teamB,
+    uint256 offset,
+    uint256 count
+  )
+    public
+    view
+    returns (
+      address[] memory owners,
+      uint256[] memory offsets,
+      uint256[] memory lengths,
+      uint256 total
+    )
+  {
+    Range[] storage ranges = teamB ? arena.teamB : arena.teamA;
+    total = ranges.length;
+    uint256 size = offset < total ? total - offset : 0;
+    if (size > count) {
+      size = count;
+    }
+    owners = new address[](size);
+    offsets = new uint256[](size);
+    lengths = new uint256[](size);
+    for (uint256 i = 0; i < size; ++i) {
+      Range storage range = ranges[offset + i];
+      owners[i] = range.owner;
+      offsets[i] = range.offset;
+      lengths[i] = range.length;
+    }
+  }
+
   /// @notice Returns the number of pixels still available for purchase (the size of the "gap").
   function getAvailablePixels(Arena storage arena) public view returns (uint256) {
     uint256 teamACount = getTeamACount(arena);

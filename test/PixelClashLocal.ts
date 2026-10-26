@@ -191,6 +191,7 @@ describe("PixelClash", () => {
 
       for (const [label, gas] of [
         ["getPixelRange", await viewGas(pixelClash.getPixelRange, 2n, 7_777n)],
+        ["getTeamRanges", await viewGas(pixelClash.getTeamRanges, 2n, false, 9_800n, 100n)],
         ["getArenaData", await viewGas(pixelClash.getArenaData, 2n)],
         ["getTopReferrers", await viewGas(pixelClash.getTopReferrers, 2n)],
         ["getAllPrizes", await viewGas(pixelClash.getAllPrizes, 2n)],

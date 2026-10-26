@@ -1,6 +1,6 @@
 import { loadFixture, mine, time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import { expect } from "chai";
-import { ethers } from "hardhat";
+import { ethers, network } from "hardhat";
 import type { BigNumberish, Signer } from "ethers";
 
 import { Deployer } from "../scripts/deployer";
@@ -67,6 +67,8 @@ function arenaParams(overrides: Record<string, unknown> = {}) {
 
 class Fixture {
   private static async _deploy(): Promise<Fixture> {
+    // The fee estimate can lag behind the base fee of the next forked block and get rejected.
+    await network.provider.send("hardhat_setNextBlockBaseFeePerGas", ["0x0"]);
     const [owner, creator, player1, player2] = await ethers.getSigners();
     const deployer = await Deployer.create();
 

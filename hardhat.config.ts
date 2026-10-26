@@ -75,6 +75,11 @@ const config: HardhatUserConfig = {
     reportPureAndViewMethods: true,
     currency: "USD",
     L1: "ethereum",
+    // Live gas and ETH prices need these API keys; GAS_PRICE_GWEI and ETH_PRICE_USD override them.
+    etherscan: process.env.ETHERSCAN_API_KEY || undefined,
+    coinmarketcap: process.env.COINMARKETCAP_API_KEY || undefined,
+    gasPrice: process.env.GAS_PRICE_GWEI ? Number(process.env.GAS_PRICE_GWEI) : undefined,
+    tokenPrice: process.env.ETH_PRICE_USD || undefined,
   },
   contractSizer: {
     alphaSort: false,

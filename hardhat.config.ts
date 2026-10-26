@@ -61,7 +61,8 @@ const config: HardhatUserConfig = {
     localhost: {
       chainId: 31337,
       url: "http://127.0.0.1:8545",
-      accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
+      // Without a deployer key, use the node's own funded accounts (the local scripts need them).
+      accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : "remote",
     },
     mainnet: {
       chainId: 1,

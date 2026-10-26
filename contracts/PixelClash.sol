@@ -824,6 +824,41 @@ contract PixelClash is
     return arena.withdrawals[player];
   }
 
+  /// @notice Returns the prizes of a player in the arenas they played in, newest first like
+  ///   `getArenasByPlayer`: what they won in each drawn arena and how much of it they withdrew.
+  ///   Prizes never expire, so this lists every prize still to withdraw.
+  /// @dev The `offset` and `count` parameters are used for paging. At most `MAX_PAGE_SIZE` arenas
+  ///   are returned regardless of `count`.
+  /// @param player The player.
+  /// @return arenaIds The arena IDs.
+  /// @return prizes The total prize of the player in each arena, zero if it isn't drawn yet.
+  /// @return withdrawn The part of each prize the player already withdrew.
+  /// @return total The total number of arenas the player played in.
+  function getPlayerPrizes(
+    address player,
+    uint256 offset,
+    uint256 count
+  )
+    public
+    view
+    returns (
+      uint256[] memory arenaIds,
+      uint256[] memory prizes,
+      uint256[] memory withdrawn,
+      uint256 total
+    )
+  {
+    uint64[] storage ids = _arenaIdsByPlayer[player];
+    total = ids.length;
+    (arenaIds, prizes, withdrawn) = ArenaMethods.getPlayerPrizes(
+      arenas,
+      ids,
+      player,
+      offset,
+      count > MAX_PAGE_SIZE ? MAX_PAGE_SIZE : count
+    );
+  }
+
   /// @notice Withdraws the prize for the caller from the specified arena, if any.
   /// @dev The amount returned by `getPrize` for the same arena is transferred to the caller if it
   ///   hasn't been transferred before. If the amount is zero (ie. the player didn't win anything

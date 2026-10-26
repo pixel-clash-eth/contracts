@@ -700,4 +700,42 @@ library ArenaMethods {
       prizes.topReferralPrize +
       prizes.arenaOwnerPrize;
   }
+
+  /// @notice Returns the prizes of a player in a page of the arenas they played in, newest first.
+  /// @param arenas All the arenas, by ID.
+  /// @param arenaIds The IDs of the arenas the player played in, oldest first.
+  /// @param player The player.
+  /// @param offset The number of newest arenas to skip.
+  /// @param count The maximum number of arenas to return.
+  /// @return ids The arena IDs.
+  /// @return prizes The total prize of the player in each arena, zero if it isn't drawn yet.
+  /// @return withdrawn The part of each prize the player already withdrew.
+  function getPlayerPrizes(
+    Arena[] storage arenas,
+    uint64[] storage arenaIds,
+    address player,
+    uint256 offset,
+    uint256 count
+  )
+    public
+    view
+    returns (uint256[] memory ids, uint256[] memory prizes, uint256[] memory withdrawn)
+  {
+    uint256 total = arenaIds.length;
+    uint256 size = offset < total ? total - offset : 0;
+    if (size > count) {
+      size = count;
+    }
+    ids = new uint256[](size);
+    prizes = new uint256[](size);
+    withdrawn = new uint256[](size);
+    for (uint256 i = 0; i < size; ++i) {
+      ids[i] = arenaIds[total - 1 - offset - i];
+      Arena storage arena = arenas[ids[i]];
+      if (getState(arena) == ARENA_STATE_DRAWN) {
+        prizes[i] = getTotalPrizeFor(arena, player);
+        withdrawn[i] = arena.withdrawals[player];
+      }
+    }
+  }
 }

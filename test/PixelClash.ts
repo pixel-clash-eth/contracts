@@ -2299,5 +2299,52 @@ describe("PixelClash", function () {
       expect(await pixelClash.getWithdrawnPrizeAmount(1, creatorAddress)).to.equal(prize);
       expect(await pixelClash.getWithdrawnPrizeAmount(1, player1Address)).to.equal(0n);
     });
+
+    it("lists the prizes of a player across arenas, newest first", async function () {
+      const fixture = await Fixture.load();
+      const { creator, player1, pixelClash } = fixture;
+      const creatorAddress = await creator.getAddress();
+      const player1Address = await player1.getAddress();
+      // Arena 1 is drawn, arena 2 is open, and player1 doesn't play in arena 3.
+      await fixture.createTestArena();
+      await fixture.fill(1);
+      await pixelClash.draw(1, { value: ethers.parseEther("1") });
+      await fixture.fulfill((await pixelClash.getArenaData(1)).vrfRequestId);
+      await fixture.createTestArena();
+      await fixture.fund(player1, 10n * ONE_USDC);
+      await fixture.purchasePixels(player1, 2, true, 10, null);
+      await fixture.createTestArena();
+
+      const player1Prize = await pixelClash.getPrizeFor(1, player1Address);
+      const creatorPrize = await pixelClash.getPrizeFor(1, creatorAddress);
+      expect(player1Prize).to.be.greaterThan(0n);
+      expect(await pixelClash.getPlayerPrizes(player1Address, 0, 10)).to.deep.equal([
+        [2n, 1n],
+        [0n, player1Prize],
+        [0n, 0n],
+        2n,
+      ]);
+      expect(await pixelClash.getPlayerPrizes(creatorAddress, 0, 10)).to.deep.equal([
+        [3n, 2n, 1n],
+        [0n, 0n, creatorPrize],
+        [0n, 0n, 0n],
+        3n,
+      ]);
+
+      await pixelClash.connect(player1).withdrawPrize(1);
+      expect(await pixelClash.getPlayerPrizes(player1Address, 1, 10)).to.deep.equal([
+        [1n],
+        [player1Prize],
+        [player1Prize],
+        2n,
+      ]);
+      expect(await pixelClash.getPlayerPrizes(player1Address, 2, 10)).to.deep.equal([[], [], [], 2n]);
+      expect(await pixelClash.getPlayerPrizes(ethers.ZeroAddress, 0, 10)).to.deep.equal([
+        [],
+        [],
+        [],
+        0n,
+      ]);
+    });
   });
 });

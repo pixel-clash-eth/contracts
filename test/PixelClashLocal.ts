@@ -58,7 +58,8 @@ async function deploy() {
   const subscriptionId = receipt!.logs
     .map((log) => coordinator.interface.parseLog(log))
     .find((log) => log?.name === "SubscriptionCreated")!.args.subId;
-  await coordinator.fundSubscriptionWithNative(subscriptionId, { value: ethers.parseEther("10") });
+  // Enough for the 100 draws of the prizes test.
+  await coordinator.fundSubscriptionWithNative(subscriptionId, { value: ethers.parseEther("1000") });
   const wrapper = await ethers.deployContract("MockVRFWrapper", [
     ethers.ZeroAddress,
     ethers.ZeroAddress,
@@ -156,6 +157,31 @@ describe("PixelClash", () => {
         ["getArenaTags", await viewGas(pixelClash.getArenaTags, 1n)],
       ] as const) {
         expect(gas, label).to.be.lessThan(VIEW_GAS_LIMIT);
+      }
+    });
+
+    it("keeps a full page of a player's prizes within RPC limits", async function () {
+      this.timeout(600_000);
+      const { pixelClash, creator, buyer, create, purchase, drawAndFulfill } = await loadFixture(deploy);
+      const referrers = (await ethers.getSigners()).slice(4, 7).map((signer) => signer.address);
+      // 100 drawn arenas created by one creator and filled by one buyer through 3 referrers, so
+      // every prize of both players is computed, top referrers included. Cheap pixels keep the
+      // buyer within its funds.
+      for (let i = 1n; i <= 100n; ++i) {
+        await create([], { pixelFee: PIXEL_FEE / 1_000n });
+        for (const referrer of referrers) await purchase(i, 3_000n, referrer);
+        await purchase(i, GRID_SIZE - INITIAL_PIXELS - 9_000n);
+        await drawAndFulfill(i, i * 97n);
+      }
+
+      for (const player of [creator.address, buyer.address]) {
+        const [ids, prizes, , total] = await pixelClash.getPlayerPrizes(player, 0n, 100n);
+        expect(ids.length).to.equal(100);
+        expect(total).to.equal(100n);
+        expect(prizes.every((prize) => prize > 0n)).to.equal(true);
+        const gas = await viewGas(pixelClash.getPlayerPrizes, player, 0n, 100n);
+        expect(gas).to.be.lessThan(VIEW_GAS_LIMIT);
+        console.log(`      getPlayerPrizes gas for 100 drawn arenas: ${gas}`);
       }
     });
 

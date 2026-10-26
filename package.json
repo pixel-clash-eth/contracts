@@ -15,7 +15,9 @@
     "local:fulfill": "hardhat run scripts/local/fulfill.ts --network localhost",
     "local:auto-fulfill": "hardhat run scripts/local/auto-fulfill.ts --network localhost",
     "local:timeout": "hardhat run scripts/local/timeout.ts --network localhost",
-    "local:fund": "hardhat run scripts/local/fund.ts --network localhost"
+    "local:fund": "hardhat run scripts/local/fund.ts --network localhost",
+    "local:seed": "hardhat run scripts/local/seed-arenas.ts --network localhost",
+    "local:hot-swap": "hardhat run scripts/local/hot-swap.ts --network localhost"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-chai-matchers": "^2.1.2",

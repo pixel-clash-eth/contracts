@@ -1604,11 +1604,9 @@ describe("PixelClash", function () {
   });
 
   it("partial fill refund is calculated at the discounted per-pixel rate", async function () {
-    // Use a small arena (gridSize 20) so we can control the fill level cheaply.
     const fixture = await Fixture.load();
     const { creator, player1, player2, currencyToken, pixelClash } = fixture;
 
-    const smallGridSize = 20;
     await currencyToken.connect(creator).mint(ARENA_CREATION_FEE);
     await currencyToken.connect(creator).approve(await pixelClash.getAddress(), ARENA_CREATION_FEE);
     await pixelClash.connect(creator).createArenaWithPermit(
@@ -1621,7 +1619,7 @@ describe("PixelClash", function () {
         teamBLogo: "\u{1F431}",
         teamBLogoCid: ethers.ZeroHash,
         teamBColor: 0x0000ff,
-        gridSize: smallGridSize,
+        gridSize: STANDARD_GRID_SIZE,
         pixelFee: ONE_USDC,
         maxDuration: STANDARD_MAX_DURATION,
       },
@@ -1633,9 +1631,9 @@ describe("PixelClash", function () {
     );
     const arenaId = 1;
 
-    // Initial pixels: 5 teamA + 5 teamB = 10 used, 10 available.
-    // player1 fills 8 pixels without a referral (teamA), leaving 2 available.
-    const fillCount = 8n;
+    // Initial pixels: 5 teamA + 5 teamB = 10 used, 9990 available.
+    // player1 fills 9988 pixels without a referral (teamA), leaving 2 available.
+    const fillCount = BigInt(STANDARD_GRID_SIZE) - INITIAL_PIXELS - 2n;
     const fillCost = ONE_USDC * fillCount;
     await currencyToken.connect(player1).mint(fillCost);
     await currencyToken.connect(player1).approve(await pixelClash.getAddress(), fillCost);

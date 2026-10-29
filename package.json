@@ -6,7 +6,18 @@
     "postinstall": "patch-package",
     "lint": "hardhat check",
     "build": "hardhat compile",
-    "test": "hardhat test --network hardhat"
+    "test": "hardhat test --network hardhat test/PixelClash.ts test/Toolchain.ts",
+    "test:local": "HARDHAT_RPC_ADDRESS= hardhat test --network hardhat test/PixelClashLocal.ts",
+    "local:node": "hardhat node --hostname 127.0.0.1 --port 8545",
+    "local:deploy": "hardhat run scripts/local/deploy.ts --network localhost",
+    "local:reset": "hardhat run scripts/local/reset.ts --network localhost",
+    "local:smoke": "hardhat run scripts/local/smoke.ts --network localhost",
+    "local:fulfill": "hardhat run scripts/local/fulfill.ts --network localhost",
+    "local:auto-fulfill": "hardhat run scripts/local/auto-fulfill.ts --network localhost",
+    "local:timeout": "hardhat run scripts/local/timeout.ts --network localhost",
+    "local:fund": "hardhat run scripts/local/fund.ts --network localhost",
+    "local:seed": "hardhat run scripts/local/seed-arenas.ts --network localhost",
+    "local:hot-swap": "hardhat run scripts/local/hot-swap.ts --network localhost"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-chai-matchers": "^2.1.2",

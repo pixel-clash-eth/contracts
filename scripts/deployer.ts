@@ -72,6 +72,10 @@ export class Deployer {
     const arenaMethodsAddress = await arenaMethods.getAddress();
     console.log(`ArenaMethods:  ${arenaMethodsAddress}`);
 
+    const tagMethods = await this.deploy("TagMethods");
+    const tagMethodsAddress = await tagMethods.getAddress();
+    console.log(`TagMethods:    ${tagMethodsAddress}`);
+
     const swapGateway = await this.deploy<SwapGateway>(
       "SwapGateway",
       currencyTokenAddress,
@@ -83,6 +87,7 @@ export class Deployer {
     const PixelClashFactory = await ethers.getContractFactory("PixelClash", {
       libraries: {
         ArenaMethods: arenaMethodsAddress,
+        TagMethods: tagMethodsAddress,
       },
     });
     const pixelClash = await upgrades.deployProxy(

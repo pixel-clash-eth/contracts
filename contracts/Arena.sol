@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.28;
 
-import {ReferralHeap, ReferralHeapMethods, ReferralRevenue} from "./Heap.sol";
+import {ReferralMethods, ReferralRevenue, Referrals} from "./Referrals.sol";
 
-// Maximum arena grid size.
-uint256 constant MAX_GRID_SIZE = 1e19;
+// Arena grid size. The frontend renders a fixed 100 x 100 grid.
+uint256 constant GRID_SIZE = 10_000;
+
+// Upper bounds on user-provided arena fields. They keep storage writes and the response size of
+// paginated views like `getArenas` bounded, so a single arena can't make a whole page unreadable.
+uint256 constant MAX_TEAM_NAME_LENGTH = 64;
+uint256 constant MAX_TEAM_LOGO_LENGTH = 64;
+uint256 constant MAX_DURATION = 365 days;
 
 // Arena states.
 uint256 constant ARENA_STATE_OPEN = 0;
@@ -23,17 +29,28 @@ uint256 constant TOP_REFERRAL_PRIZE_2 = 4;
 uint256 constant TOP_REFERRAL_PRIZE_3 = 2;
 uint256 constant ARENA_OWNER_PRIZE = 5;
 
-/// @notice A range of pixels in an arena.
+/// @notice A range of pixels in an arena, as stored.
 /// @dev `offset+length` must be less than or equal to the grid size of the arena.
+/// @dev All fields are packed in a single storage slot, so each purchase writes one slot. 16 bits
+///   are enough because the grid has `GRID_SIZE` pixels, and the referrer is stored as its ID in
+///   the arena's `Referrals` instead of its 160-bit address.
 struct Range {
   /// The owner of the range.
   address owner;
   /// Zero-based offset of the range. For team A this is the offset from the beginning of the grid,
   /// while for team B it's the offset from the end.
-  uint256 offset;
+  uint16 offset;
   /// Length of the range.
+  uint16 length;
+  /// The referrer ID in `Arena.referrals`, or zero if the range was purchased without a referral.
+  uint64 referrerId;
+}
+
+/// @notice A range of pixels with the referrer's address. Suitable for data retrieval.
+struct PixelRange {
+  address owner;
+  uint256 offset;
   uint256 length;
-  /// The referrer address, or the zero address if the range was purchased without a referral.
   address referrer;
 }
 
@@ -83,7 +100,7 @@ struct Arena {
   /// ranges.
   mapping(address => uint256) teamBShares;
   /// Keeps track of all referrers for the arena and allow retrieving the top 3 efficiently.
-  ReferralHeap referrals;
+  Referrals referrals;
   /// The total revenue accumulated by the arena, including the initial creation fee.
   uint256 revenue;
   /// The current balance of the arena, equal to `revenue` minus anything that has been withdrawn.
@@ -149,7 +166,7 @@ struct CreateArenaParams {
 }
 
 library ArenaMethods {
-  using ReferralHeapMethods for ReferralHeap;
+  using ReferralMethods for Referrals;
 
   error InvalidArgument();
   error GridTooSmall(uint256 gridSize);
@@ -167,14 +184,17 @@ library ArenaMethods {
   ) external {
     if (
       (bytes(params.teamAName).length == 0) ||
+      (bytes(params.teamAName).length > MAX_TEAM_NAME_LENGTH) ||
       (bytes(params.teamALogo).length == 0) ||
+      (bytes(params.teamALogo).length > MAX_TEAM_LOGO_LENGTH) ||
       (bytes(params.teamBName).length == 0) ||
+      (bytes(params.teamBName).length > MAX_TEAM_NAME_LENGTH) ||
       (bytes(params.teamBLogo).length == 0) ||
-      (params.gridSize == 0) ||
-      (params.gridSize > MAX_GRID_SIZE) ||
-      ((params.gridSize % 2) != 0) ||
+      (bytes(params.teamBLogo).length > MAX_TEAM_LOGO_LENGTH) ||
+      (params.gridSize != GRID_SIZE) ||
       (params.pixelFee == 0) ||
-      (params.maxDuration == 0)
+      (params.maxDuration == 0) ||
+      (params.maxDuration > MAX_DURATION)
     ) {
       revert InvalidArgument();
     }
@@ -197,11 +217,11 @@ library ArenaMethods {
       revert GridTooSmall(arena.gridSize);
     }
     arena.teamA.push(
-      Range({owner: owner, offset: 0, length: numPixelsPerTeam, referrer: address(0)})
+      Range({owner: owner, offset: 0, length: uint16(numPixelsPerTeam), referrerId: 0})
     );
     arena.teamAShares[owner] += numPixelsPerTeam;
     arena.teamB.push(
-      Range({owner: owner, offset: 0, length: numPixelsPerTeam, referrer: address(0)})
+      Range({owner: owner, offset: 0, length: uint16(numPixelsPerTeam), referrerId: 0})
     );
     arena.teamBShares[owner] += numPixelsPerTeam;
   }
@@ -223,6 +243,46 @@ library ArenaMethods {
       return lastRange.offset + lastRange.length;
     } else {
       return 0;
+    }
+  }
+
+  /// @notice Returns a page of the pixel ranges of a team, in order of acquisition.
+  /// @param teamB Whether to return the ranges of team B rather than team A.
+  /// @param offset The index of the first range to return.
+  /// @param count The maximum number of ranges to return.
+  /// @return owners The owner of each range.
+  /// @return offsets The offset of each range, counted from the corner of the team.
+  /// @return lengths The number of pixels of each range.
+  /// @return total The total number of ranges of the team.
+  function getRanges(
+    Arena storage arena,
+    bool teamB,
+    uint256 offset,
+    uint256 count
+  )
+    public
+    view
+    returns (
+      address[] memory owners,
+      uint256[] memory offsets,
+      uint256[] memory lengths,
+      uint256 total
+    )
+  {
+    Range[] storage ranges = teamB ? arena.teamB : arena.teamA;
+    total = ranges.length;
+    uint256 size = offset < total ? total - offset : 0;
+    if (size > count) {
+      size = count;
+    }
+    owners = new address[](size);
+    offsets = new uint256[](size);
+    lengths = new uint256[](size);
+    for (uint256 i = 0; i < size; ++i) {
+      Range storage range = ranges[offset + i];
+      owners[i] = range.owner;
+      offsets[i] = range.offset;
+      lengths[i] = range.length;
     }
   }
 
@@ -330,22 +390,35 @@ library ArenaMethods {
     assert(teamACount + teamBCount < arena.gridSize);
     uint256 availablePixels = arena.gridSize - teamACount - teamBCount;
     acquired = availablePixels < count ? availablePixels : count;
+    uint256 fee = effectivePixelFee * acquired;
+    arena.revenue += fee;
+    arena.balance += fee;
+    uint256 referrerId = 0;
+    if (referrer != address(0)) {
+      referrerId = arena.referrals.addReferral(referrer, fee);
+    }
+    // The casts are safe because counts are bounded by `GRID_SIZE` and there can't be more
+    // referrers than purchases.
     if (teamB) {
       arena.teamB.push(
-        Range({owner: player, offset: teamBCount, length: acquired, referrer: referrer})
+        Range({
+          owner: player,
+          offset: uint16(teamBCount),
+          length: uint16(acquired),
+          referrerId: uint64(referrerId)
+        })
       );
       arena.teamBShares[player] += acquired;
     } else {
       arena.teamA.push(
-        Range({owner: player, offset: teamACount, length: acquired, referrer: referrer})
+        Range({
+          owner: player,
+          offset: uint16(teamACount),
+          length: uint16(acquired),
+          referrerId: uint64(referrerId)
+        })
       );
       arena.teamAShares[player] += acquired;
-    }
-    uint256 fee = effectivePixelFee * acquired;
-    arena.revenue += fee;
-    arena.balance += fee;
-    if (referrer != address(0)) {
-      arena.referrals.addReferral(referrer, fee);
     }
   }
 
@@ -361,7 +434,22 @@ library ArenaMethods {
   function getPixelRange(
     Arena storage arena,
     uint256 index
-  ) public view returns (Range memory result, bool teamB) {
+  ) public view returns (PixelRange memory result, bool teamB) {
+    Range memory range;
+    (range, teamB) = findRange(arena, index);
+    result = PixelRange({
+      owner: range.owner,
+      offset: range.offset,
+      length: range.length,
+      referrer: arena.referrals.referrerOf(range.referrerId)
+    });
+  }
+
+  /// @notice Like `getPixelRange`, but returns the stored range, with the referrer ID.
+  function findRange(
+    Arena storage arena,
+    uint256 index
+  ) private view returns (Range memory result, bool teamB) {
     uint256 teamACount = getTeamACount(arena);
     uint256 teamBCount = getTeamBCount(arena);
     assert(index < arena.gridSize);
@@ -396,7 +484,7 @@ library ArenaMethods {
       }
     } else {
       // index is in the gap
-      return (Range({owner: address(0), offset: 0, length: 0, referrer: address(0)}), false);
+      return (Range({owner: address(0), offset: 0, length: 0, referrerId: 0}), false);
     }
     // we should never get here
     assert(false);
@@ -502,8 +590,8 @@ library ArenaMethods {
   ///   referrer.
   function getSponsorPrize(Arena storage arena) public view returns (uint256) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
-    (Range memory range, ) = getPixelRange(arena, uint256(arena.winner));
-    return getSponsorPrizeImpl(arena, range.referrer);
+    (Range memory range, ) = findRange(arena, uint256(arena.winner));
+    return getSponsorPrizeImpl(arena, arena.referrals.referrerOf(range.referrerId));
   }
 
   function getTopReferralPrize1(Arena storage arena) public view returns (uint256) {
@@ -590,12 +678,13 @@ library ArenaMethods {
   /// @notice Returns the prizes won by a player in this arena.
   function getPrizesFor(Arena storage arena, address player) public view returns (Prizes memory) {
     assert(getState(arena) >= ARENA_STATE_DRAWN);
-    (Range memory range, ) = getPixelRange(arena, uint256(arena.winner));
+    (Range memory range, ) = findRange(arena, uint256(arena.winner));
+    address referrer = arena.referrals.referrerOf(range.referrerId);
     return
       Prizes({
         winnerPrize: (player != range.owner) ? 0 : getWinnerPrize(arena),
         teamPrize: getTeamPrizeFor(arena, player),
-        sponsorPrize: (player != range.referrer) ? 0 : getSponsorPrizeImpl(arena, range.referrer),
+        sponsorPrize: (player != referrer) ? 0 : getSponsorPrizeImpl(arena, referrer),
         topReferralPrize: getTopReferralPrizeFor(arena, player),
         arenaOwnerPrize: (player != arena.owner) ? 0 : getArenaOwnerPrize(arena)
       });
@@ -610,5 +699,43 @@ library ArenaMethods {
       prizes.sponsorPrize +
       prizes.topReferralPrize +
       prizes.arenaOwnerPrize;
+  }
+
+  /// @notice Returns the prizes of a player in a page of the arenas they played in, newest first.
+  /// @param arenas All the arenas, by ID.
+  /// @param arenaIds The IDs of the arenas the player played in, oldest first.
+  /// @param player The player.
+  /// @param offset The number of newest arenas to skip.
+  /// @param count The maximum number of arenas to return.
+  /// @return ids The arena IDs.
+  /// @return prizes The total prize of the player in each arena, zero if it isn't drawn yet.
+  /// @return withdrawn The part of each prize the player already withdrew.
+  function getPlayerPrizes(
+    Arena[] storage arenas,
+    uint64[] storage arenaIds,
+    address player,
+    uint256 offset,
+    uint256 count
+  )
+    public
+    view
+    returns (uint256[] memory ids, uint256[] memory prizes, uint256[] memory withdrawn)
+  {
+    uint256 total = arenaIds.length;
+    uint256 size = offset < total ? total - offset : 0;
+    if (size > count) {
+      size = count;
+    }
+    ids = new uint256[](size);
+    prizes = new uint256[](size);
+    withdrawn = new uint256[](size);
+    for (uint256 i = 0; i < size; ++i) {
+      ids[i] = arenaIds[total - 1 - offset - i];
+      Arena storage arena = arenas[ids[i]];
+      if (getState(arena) == ARENA_STATE_DRAWN) {
+        prizes[i] = getTotalPrizeFor(arena, player);
+        withdrawn[i] = arena.withdrawals[player];
+      }
+    }
   }
 }

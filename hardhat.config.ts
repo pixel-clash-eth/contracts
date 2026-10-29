@@ -9,6 +9,9 @@ import "hardhat-contract-sizer";
 
 dotenv.config();
 
+const forkUrl = process.env.HARDHAT_RPC_ADDRESS;
+const forkBlock = process.env.HARDHAT_FORK_BLOCK;
+
 const config: HardhatUserConfig = {
   solidity: {
     compilers: [
@@ -27,23 +30,39 @@ const config: HardhatUserConfig = {
         },
       },
     ],
-    overrides: {},
+    overrides: {
+      // PixelClash is mostly glue code around the ArenaMethods/TagMethods libraries, which keep the
+      // high `runs` value above. A lower value here keeps it below the 24 KiB EIP-170 limit.
+      "contracts/PixelClash.sol": {
+        version: "0.8.28",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 10_000,
+          },
+          debug: {
+            revertStrings: "strip",
+          },
+          evmVersion: "cancun",
+          viaIR: true,
+        },
+      },
+    },
   },
   networks: {
     hardhat: {
       chainId: 31337,
-      forking: {
-        url: process.env.HARDHAT_RPC_ADDRESS!,
-        enabled: !!process.env.HARDHAT_RPC_ADDRESS,
-        blockNumber: process.env.HARDHAT_FORK_BLOCK
-          ? parseInt(process.env.HARDHAT_FORK_BLOCK!, 10)
-          : void 0,
-      },
+      hardfork: "cancun",
+      forking: forkUrl ? {
+        url: forkUrl,
+        blockNumber: forkBlock ? Number.parseInt(forkBlock, 10) : undefined,
+      } : undefined,
     },
     localhost: {
       chainId: 31337,
-      url: "http://localhost:8545",
-      accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
+      url: "http://127.0.0.1:8545",
+      // Without a deployer key, use the node's own funded accounts (the local scripts need them).
+      accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : "remote",
     },
     mainnet: {
       chainId: 1,
@@ -52,9 +71,15 @@ const config: HardhatUserConfig = {
     },
   },
   gasReporter: {
-    enabled: false,
+    enabled: true,
+    reportPureAndViewMethods: true,
     currency: "USD",
     L1: "ethereum",
+    // Live gas and ETH prices need these API keys; GAS_PRICE_GWEI and ETH_PRICE_USD override them.
+    etherscan: process.env.ETHERSCAN_API_KEY || undefined,
+    coinmarketcap: process.env.COINMARKETCAP_API_KEY || undefined,
+    gasPrice: process.env.GAS_PRICE_GWEI ? Number(process.env.GAS_PRICE_GWEI) : undefined,
+    tokenPrice: process.env.ETH_PRICE_USD || undefined,
   },
   contractSizer: {
     alphaSort: false,
